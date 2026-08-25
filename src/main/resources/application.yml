@@ -1,0 +1,9 @@
+server:
+  port: 18790
+spring:
+  application:
+    name: lobster-gateway
+  autoconfigure:
+    exclude: org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+lobster:
+  state-dir: ${LOBSTER_STATE_DIR:}
