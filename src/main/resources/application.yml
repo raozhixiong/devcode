@@ -4,6 +4,8 @@ spring:
   application:
     name: lobster-gateway
   autoconfigure:
-    exclude: org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration
 lobster:
   state-dir: ${LOBSTER_STATE_DIR:}
