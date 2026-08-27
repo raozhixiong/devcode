@@ -54,6 +54,7 @@ public class WsHandler extends TextWebSocketHandler {
     private final com.lobster.store.ChannelStore channelStore;
     private final com.lobster.store.ConfigStore configStore;
     private final com.lobster.store.PluginStore pluginStore;
+    private final com.lobster.store.HookStore hookStore;
     private final Map<WebSocketSession, Runnable> unsubscribes = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, AuthInfo> authBySession = new ConcurrentHashMap<>();
@@ -79,7 +80,8 @@ public class WsHandler extends TextWebSocketHandler {
                      com.lobster.store.ApprovalStore approvalStore,
                      com.lobster.store.ChannelStore channelStore,
                      com.lobster.store.ConfigStore configStore,
-                     com.lobster.store.PluginStore pluginStore) {
+                     com.lobster.store.PluginStore pluginStore,
+                     com.lobster.store.HookStore hookStore) {
         this.store = store;
         this.bus = bus;
         this.loop = loop;
@@ -101,6 +103,7 @@ public class WsHandler extends TextWebSocketHandler {
         this.channelStore = channelStore;
         this.configStore = configStore;
         this.pluginStore = pluginStore;
+        this.hookStore = hookStore;
     }
 
     @Override
@@ -241,6 +244,10 @@ public class WsHandler extends TextWebSocketHandler {
             case "plugins.install" -> pluginsInstall(session, id, params);
             case "plugins.setEnabled" -> pluginsSetEnabled(session, id, params);
             case "plugins.uninstall" -> pluginsUninstall(session, id, params);
+            case "hooks.install" -> hooksInstall(session, id, params);
+            case "hooks.list" -> hooksList(session, id);
+            case "hooks.setEnabled" -> hooksSetEnabled(session, id, params);
+            case "hooks.remove" -> hooksRemove(session, id, params);
             default -> {
                 ObjectNode err = OM.createObjectNode();
                 err.put("code", "METHOD_NOT_FOUND");
@@ -1470,6 +1477,57 @@ public class WsHandler extends TextWebSocketHandler {
         }
         pluginStore.uninstall(pluginId);
         sendRes(session, id, true, OM.createObjectNode().put("pluginId", pluginId));
+    }
+
+    // ==================== M6 钩子 RPC（FR-I1） ====================
+
+    private void hooksInstall(WebSocketSession session, String id, JsonNode params) {
+        String event = params.path("event").asText();
+        String kind = params.path("kind").asText("command");
+        String command = params.path("command").asText();
+        String scope = params.path("scope").asText("global");
+        String scopeId = params.path("scopeId").asText(null);
+        int timeout = params.path("timeoutMs").asInt(5000);
+        if (event.isEmpty() || command.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "event 和 command 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        var hook = hookStore.install(scope, scopeId, event, kind, command, timeout);
+        sendRes(session, id, true, OM.createObjectNode()
+                .put("hookId", hook.id()).put("event", hook.event()).put("scope", hook.scope()));
+    }
+
+    private void hooksList(WebSocketSession session, String id) {
+        var hooks = hookStore.list();
+        ArrayNode arr = OM.valueToTree(hooks);
+        sendRes(session, id, true, OM.createObjectNode().set("hooks", arr));
+    }
+
+    private void hooksSetEnabled(WebSocketSession session, String id, JsonNode params) {
+        String hookId = params.path("id").asText();
+        boolean enabled = params.path("enabled").asBoolean(true);
+        if (hookId.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "id 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        hookStore.setEnabled(hookId, enabled);
+        sendRes(session, id, true, OM.createObjectNode().put("hookId", hookId).put("enabled", enabled));
+    }
+
+    private void hooksRemove(WebSocketSession session, String id, JsonNode params) {
+        String hookId = params.path("id").asText();
+        if (hookId.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "id 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        hookStore.remove(hookId);
+        sendRes(session, id, true, OM.createObjectNode().put("hookId", hookId));
     }
 
     private void sendRes(WebSocketSession session, String id, boolean ok, JsonNode payload) {

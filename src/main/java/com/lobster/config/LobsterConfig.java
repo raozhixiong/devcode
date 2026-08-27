@@ -6,7 +6,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * lobster.json 运行时配置（~/.lobster/lobster.json 或 lobster.config 路径覆盖）。
@@ -22,8 +24,13 @@ public class LobsterConfig {
     /** 权限规则三元组：permission, pattern, action。 */
     public record RuleItem(String permission, String pattern, String action) {}
 
+    /** MCP server 定义（FR-A4-7）：stdio 传输启动子进程。 */
+    public record McpServer(String name, String transport, String command,
+                            List<String> args, Map<String, String> env) {}
+
     private final LlmSettings llm;
     private final List<RuleItem> rules;
+    private final List<McpServer> mcpServers;
 
     public LobsterConfig(Path stateDir, String configOverride) {
         Path p = (configOverride == null || configOverride.isBlank())
@@ -31,6 +38,7 @@ public class LobsterConfig {
                 : Path.of(configOverride);
         LlmSettings parsedLlm = null;
         List<RuleItem> parsedRules = new ArrayList<>();
+        List<McpServer> parsedMcp = new ArrayList<>();
         if (Files.isRegularFile(p)) {
             try {
                 JsonNode root = OM.readTree(Files.readString(p));
@@ -53,12 +61,35 @@ public class LobsterConfig {
                                 item.path("action").asText("ASK")));
                     }
                 }
+                JsonNode m = root.path("mcp");
+                if (m.isObject()) {
+                    JsonNode servers = m.path("servers");
+                    if (servers.isArray()) {
+                        for (JsonNode s : servers) {
+                            List<String> args = new ArrayList<>();
+                            if (s.path("args").isArray()) {
+                                for (JsonNode a : s.path("args")) args.add(a.asText());
+                            }
+                            Map<String, String> env = new LinkedHashMap<>();
+                            JsonNode e = s.path("env");
+                            if (e.isObject()) {
+                                e.fields().forEachRemaining(x -> env.put(x.getKey(), x.getValue().asText()));
+                            }
+                            parsedMcp.add(new McpServer(
+                                    s.path("name").asText(),
+                                    s.path("transport").asText("stdio"),
+                                    s.path("command").asText(),
+                                    args, env));
+                        }
+                    }
+                }
             } catch (Exception e) {
                 throw new IllegalStateException("lobster.json 解析失败: " + p, e);
             }
         }
         this.llm = parsedLlm;
         this.rules = List.copyOf(parsedRules);
+        this.mcpServers = List.copyOf(parsedMcp);
     }
 
     public LlmSettings llm() { return llm; }
@@ -66,4 +97,6 @@ public class LobsterConfig {
     public boolean hasRealLlm() { return llm != null; }
 
     public List<RuleItem> permissionRules() { return rules; }
+
+    public List<McpServer> mcpServers() { return mcpServers; }
 }

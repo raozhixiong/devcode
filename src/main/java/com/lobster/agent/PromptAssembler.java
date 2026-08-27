@@ -23,10 +23,14 @@ public class PromptAssembler {
     }
 
     public String assemble(List<LlmProvider.ToolSpec> tools) {
-        return assemble(tools, Path.of(System.getProperty("user.dir")));
+        return assemble(tools, Path.of(System.getProperty("user.dir")), List.of());
     }
 
     public String assemble(List<LlmProvider.ToolSpec> tools, Path workingDir) {
+        return assemble(tools, workingDir, List.of());
+    }
+
+    public String assemble(List<LlmProvider.ToolSpec> tools, Path workingDir, List<String> skillNames) {
         StringBuilder sb = new StringBuilder();
         sb.append("你是龙虾工作台的智能代理（").append(agentId).append("），帮助用户完成软件工程任务。\n\n");
 
@@ -47,6 +51,10 @@ public class PromptAssembler {
               .append(String.join(", ", tools.stream().map(LlmProvider.ToolSpec::name).toList()))
               .append('\n');
             sb.append("使用工具时给出明确的参数；完成后给出简明总结。\n");
+        }
+        if (skillNames != null && !skillNames.isEmpty()) {
+            sb.append("\n可用技能（用 skill 工具加载其指令）：")
+              .append(String.join(", ", skillNames)).append('\n');
         }
         return sb.toString();
     }

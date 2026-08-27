@@ -43,8 +43,12 @@ public class AgentLoop {
     private com.lobster.store.WriterClaimStore claims;
     private com.lobster.store.MemoryStore memoryStore;
     private com.lobster.store.AuditStore auditStore;
+    /** 生命周期钩子引擎（null = 不触发钩子）。 */
+    private com.lobster.agent.HookEngine hookEngine;
     /** 角色工具过滤器（null = 不过滤）。 */
     private volatile java.util.function.Predicate<String> toolFilter;
+    /** 注入 prompt 的可用技能名（null = 不注入）。 */
+    private volatile java.util.List<String> skillNames = java.util.List.of();
     /** 当前 run 的 writer claim（run 内有效）。 */
     private final java.util.Map<String, com.lobster.store.WriterClaimStore.Claim> activeClaims =
             new java.util.concurrent.ConcurrentHashMap<>();
@@ -74,8 +78,16 @@ public class AgentLoop {
         this.auditStore = auditStore;
     }
 
+    public void setHookEngine(com.lobster.agent.HookEngine hookEngine) {
+        this.hookEngine = hookEngine;
+    }
+
     public void setToolFilter(java.util.function.Predicate<String> filter) {
         this.toolFilter = filter;
+    }
+
+    public void setSkillNames(java.util.List<String> names) {
+        this.skillNames = names == null ? java.util.List.of() : names;
     }
 
     private boolean toolAllowed(String toolId) {
@@ -128,6 +140,7 @@ public class AgentLoop {
         if (auditStore != null) {
             auditStore.record(agentId, "run.start", sessionId, agentId, "started", null);
         }
+        fireHook(Events.AGENT_RUN_STARTED, sessionId, "{\"sessionId\":\"" + sessionId + "\"}");
         try {
             runLoop(sessionId);
             drainInbox(sessionId);
@@ -140,6 +153,7 @@ public class AgentLoop {
             if (auditStore != null) {
                 auditStore.record(agentId, "run.end", sessionId, agentId, "completed", null);
             }
+            fireHook(Events.AGENT_RUN_ENDED, sessionId, "{\"sessionId\":\"" + sessionId + "\"}");
             bus.publish(new com.lobster.event.LobsterEvent(
                     Events.SESSION_IDLE, sessionId,
                     OM.createObjectNode(), false));
@@ -298,7 +312,8 @@ public class AgentLoop {
 
             // 组装请求
             List<LlmProvider.ToolSpec> toolSpecs = toolSpecs();
-            String system = promptAssembler.assemble(toolSpecs);
+            String system = promptAssembler.assemble(toolSpecs, java.nio.file.Path.of(
+                    System.getProperty("user.dir")), skillNames);
             List<LlmProvider.ChatMsg> messages = toChatMessages(history, sessionId);
 
             // 消费 LLM 流
@@ -377,6 +392,17 @@ public class AgentLoop {
     }
 
     private void executeTool(String sessionId, String assistantMessageId, LlmEvent.ToolCall call) {
+        // 钩子：tool.before（block 语义，退出码 2 拦截）
+        if (hookEngine != null) {
+            var before = hookEngine.fire(Events.TOOL_BEFORE, agentId, sessionId,
+                    "{\"tool\":\"" + call.name() + "\",\"callId\":\"" + call.callId() + "\"}");
+            if (before.blocked()) {
+                store.addPart(assistantMessageId, new Part.Tool(call.name(), call.callId(),
+                        new Part.ToolState.Error("被 hook 拦截: " + call.name())));
+                publishToolFailed(sessionId, call, "hook 拦截");
+                return;
+            }
+        }
         // Plan 模式权限裁剪：写/执行类工具禁用（write 例外：仅 plans/*.md）
         if (planMode.isToolDenied(sessionId, call.name())) {
             store.addPart(assistantMessageId, new Part.Tool(call.name(), call.callId(),
@@ -432,11 +458,27 @@ public class AgentLoop {
                             .put("callID", call.callId())
                             .put("title", result.title())
                             .put("output", truncate(result.output(), 4000)), true));
+            fireToolAfterHooks(sessionId, call, "success");
         } catch (Exception e) {
             String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             store.updateToolState(assistantMessageId, call.callId(),
                     new Part.ToolState.Error(msg));
             publishToolFailed(sessionId, call, msg);
+            fireToolAfterHooks(sessionId, call, "error");
+        }
+    }
+
+    /** tool.after（after 语义，非阻断）+ skill/mcp 完成钩子（按工具名前缀派发）。 */
+    private void fireToolAfterHooks(String sessionId, LlmEvent.ToolCall call, String outcome) {
+        if (hookEngine == null) return;
+        hookEngine.fire(Events.TOOL_AFTER, agentId, sessionId,
+                "{\"tool\":\"" + call.name() + "\",\"callId\":\"" + call.callId() + "\",\"outcome\":\"" + outcome + "\"}");
+        if (call.name().startsWith("skill")) {
+            hookEngine.fire(Events.SKILL_COMPLETED, agentId, sessionId,
+                    "{\"tool\":\"" + call.name() + "\",\"callId\":\"" + call.callId() + "\"}");
+        } else if (call.name().startsWith("mcp")) {
+            hookEngine.fire(Events.MCP_TOOL_COMPLETED, agentId, sessionId,
+                    "{\"tool\":\"" + call.name() + "\",\"callId\":\"" + call.callId() + "\"}");
         }
     }
 
@@ -475,6 +517,12 @@ public class AgentLoop {
     private void publishStatus(String sessionId, String status) {
         bus.publish(new com.lobster.event.LobsterEvent(Events.SESSION_STATUS, sessionId,
                 OM.createObjectNode().put("type", status), false));
+    }
+
+    private void fireHook(String event, String sessionId, String payload) {
+        if (hookEngine != null) {
+            hookEngine.fire(event, agentId, sessionId, payload);
+        }
     }
 
     private Part.Tool findToolPart(String assistantMessageId, String callId) {

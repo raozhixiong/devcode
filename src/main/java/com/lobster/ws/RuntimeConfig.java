@@ -154,6 +154,40 @@ public class RuntimeConfig {
     }
 
     @Bean
+    public com.lobster.store.HookStore hookStore(javax.sql.DataSource sharedDataSource, EventBus bus) {
+        return new com.lobster.store.HookStore(
+                new org.springframework.jdbc.core.JdbcTemplate(sharedDataSource), bus);
+    }
+
+    @Bean
+    public com.lobster.agent.HookEngine hookEngine(com.lobster.store.HookStore hookStore, EventBus bus) {
+        return new com.lobster.agent.HookEngine(hookStore, bus);
+    }
+
+    @Bean
+    public com.lobster.mcp.McpManager mcpManager(LobsterConfig config) {
+        var mgr = new com.lobster.mcp.McpManager();
+        var log = org.slf4j.LoggerFactory.getLogger(RuntimeConfig.class);
+        for (var s : config.mcpServers()) {
+            if (!"stdio".equals(s.transport())) continue;
+            try {
+                var transport = new com.lobster.mcp.StdioTransport(s.command(), s.args(), s.env());
+                var t = Thread.ofVirtual().start(() -> {
+                    try {
+                        mgr.connect(s.name(), transport);
+                    } catch (Exception e) {
+                        log.warn("MCP 服务器 {} 连接失败: {}", s.name(), e.getMessage());
+                    }
+                });
+                t.join(15_000);
+            } catch (Exception e) {
+                log.warn("MCP 服务器 {} 启动失败: {}", s.name(), e.getMessage());
+            }
+        }
+        return mgr;
+    }
+
+    @Bean
     public MessageStore messageStore(AgentDb mainAgentDb) {
         return new MessageStore(mainAgentDb);
     }
@@ -200,14 +234,19 @@ public class RuntimeConfig {
 
     @Bean
     public AgentLoop agentLoop(MessageStore store, EventBus bus, PermissionEngine permissions,
-                               LobsterConfig config, com.lobster.store.InboxStore inbox,
-                               AgentDb mainAgentDb, com.lobster.store.TaskStore taskStore,
-                               com.lobster.store.MemoryStore memoryStore,
-                               com.lobster.store.AuditStore auditStore) {
+                                LobsterConfig config, com.lobster.store.InboxStore inbox,
+                                AgentDb mainAgentDb, com.lobster.store.TaskStore taskStore,
+                                com.lobster.store.MemoryStore memoryStore,
+                                com.lobster.store.AuditStore auditStore,
+                                com.lobster.store.SkillsStore skillsStore,
+                                com.lobster.agent.HookEngine hookEngine,
+                                com.lobster.mcp.McpManager mcpManager) {
         var tools = ToolRegistry.of(
                 new ReadTool(), new WriteTool(), new EditTool(),
                 new GlobTool(), new GrepTool(), new BashTool(),
                 new TodoTool(), new QuestionTool(), new ListTool());
+        tools.register(new com.lobster.tool.builtin.SkillTool(skillsStore));
+        for (var mt : mcpManager.tools()) tools.register(mt);
         LlmProvider llm;
         String model;
         if (config.hasRealLlm()) {
@@ -230,6 +269,8 @@ public class RuntimeConfig {
         tools.register(new com.lobster.tool.builtin.MemorySearchTool(memoryStore));
         loop.setMemoryStore(memoryStore);
         loop.setAuditStore(auditStore);
+        loop.setSkillNames(skillsStore.enabledNames());
+        loop.setHookEngine(hookEngine);
         return loop;
     }
 

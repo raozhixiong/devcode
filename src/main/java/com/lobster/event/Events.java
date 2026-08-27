@@ -40,5 +40,19 @@ public final class Events {
     public static final String CONFIG_CHANGED = "config.changed";
     public static final String PLUGINS_CHANGED = "plugins.changed";
 
+    // ---- M6 钩子框架（FR-I1）事件 ----
+    public static final String HOOKS_CHANGED = "hooks.changed";
+    public static final String HOOK_FIRED = "hook.fired";
+    public static final String AGENT_RUN_STARTED = "agent.run.started";
+    public static final String AGENT_RUN_ENDED = "agent.run.ended";
+    public static final String TOOL_BEFORE = "tool.before";
+    public static final String TOOL_AFTER = "tool.after";
+    public static final String SKILL_COMPLETED = "skill.completed";
+    public static final String MCP_TOOL_COMPLETED = "mcp.tool.completed";
+    public static final String MESSAGE_RECEIVED = "message.received";
+    public static final String MESSAGE_SENT = "message.sent";
+    public static final String COMPACTION_DONE = "compaction.done";
+    public static final String CHAT_SYSTEM_TRANSFORM = "chat.system.transform";
+
     private Events() {}
 }
