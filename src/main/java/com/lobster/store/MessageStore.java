@@ -40,6 +40,98 @@ public class MessageStore {
         return rows.stream().findFirst();
     }
 
+    public Optional<Session> findById(String id) {
+        List<Session> rows = jdbc.query(
+                "SELECT id, session_key, kind, title, directory, created_at, updated_at FROM session WHERE id=?",
+                (rs, i) -> new Session(rs.getString(1), rs.getString(2), rs.getString(3),
+                        rs.getString(4), rs.getString(5), rs.getLong(6), rs.getLong(7)),
+                id);
+        return rows.stream().findFirst();
+    }
+
+    /** 重命名/设置标题。 */
+    public void setTitle(String sessionId, String title) {
+        jdbc.update("UPDATE session SET title=?, updated_at=? WHERE id=?",
+                title, System.currentTimeMillis(), sessionId);
+    }
+
+    /** 归档会话（软删除：archived_at 置时间）。 */
+    public void archive(String sessionId) {
+        jdbc.update("UPDATE session SET archived_at=?, updated_at=? WHERE id=?",
+                System.currentTimeMillis(), System.currentTimeMillis(), sessionId);
+    }
+
+    /** 恢复归档会话。 */
+    public void restore(String sessionId) {
+        jdbc.update("UPDATE session SET archived_at=NULL, updated_at=? WHERE id=?",
+                System.currentTimeMillis(), sessionId);
+    }
+
+    /** rewind：软删除 sessionId 中晚于 upToMessageId（不含）的消息（标记 rewound）。 */
+    public void rewind(String sessionId, String upToMessageId) {
+        long now = System.currentTimeMillis();
+        List<String> all = jdbc.query(
+                "SELECT id FROM message WHERE session_id=? ORDER BY created_at, id",
+                (rs, i) -> rs.getString(1), sessionId);
+        boolean found = false;
+        for (String id : all) {
+            if (found) {
+                jdbc.update("UPDATE message SET data=json_set(data, '$.rewound', json('true')), updated_at=? WHERE id=?",
+                        now, id);
+            }
+            if (id.equals(upToMessageId)) { found = true; }
+        }
+        if (!found) throw new IllegalArgumentException("upToMessageId 不在会话中: " + upToMessageId);
+    }
+
+    /**
+     * fork：从 sessionId 复制消息到新会话（截至 upToMessageId 含）。
+     * 新会话 parent_id 指向原会话，kind=fork。
+     */
+    public Session fork(String sessionId, String upToMessageId, String newKey) {
+        long now = System.currentTimeMillis();
+        Session parent = findById(sessionId).orElseThrow(() ->
+                new IllegalArgumentException("会话不存在: " + sessionId));
+        String newId = Ulid.next("ses_");
+        jdbc.update("INSERT INTO session(id, session_key, parent_id, kind, directory, created_at, updated_at) " +
+                        "VALUES(?, ?, ?, 'fork', ?, ?, ?)",
+                newId, newKey, sessionId, parent.directory(), now, now);
+        // 复制 upToMessageId 及之前的消息（含）
+        List<String> all = jdbc.query(
+                "SELECT id FROM message WHERE session_id=? ORDER BY created_at, id",
+                (rs, i) -> rs.getString(1), sessionId);
+        for (String mid : all) {
+            copyMessage(mid, newId);
+            if (mid.equals(upToMessageId)) break;
+        }
+        return new Session(newId, newKey, "fork", null, parent.directory(), now, now);
+    }
+
+    private void copyMessage(String sourceId, String targetSessionId) {
+        record MsgRow(String id, String role, String data, long createdAt) {}
+        MsgRow src = jdbc.queryForObject(
+                "SELECT id, role, data, created_at FROM message WHERE id=?",
+                (rs, i) -> new MsgRow(rs.getString(1), rs.getString(2), rs.getString(3), rs.getLong(4)),
+                sourceId);
+        String newMsgId = Ulid.next("msg_");
+        jdbc.update("INSERT INTO message(id, session_id, role, data, created_at, updated_at) VALUES(?,?,?,?,?,?)",
+                newMsgId, targetSessionId, src.role(), src.data(), src.createdAt(), src.createdAt());
+        // 复制 part 行
+        jdbc.query("SELECT data, type FROM part WHERE message_id=? ORDER BY id",
+                (rs, i) -> {
+                    try {
+                        String partId = Ulid.next("prt_");
+                        jdbc.update("INSERT INTO part(id, session_id, message_id, type, data, created_at) " +
+                                        "SELECT ?, ?, ?, ?, ?, ?",
+                                partId, targetSessionId, newMsgId, rs.getString(2), rs.getString(1),
+                                src.createdAt());
+                    } catch (Exception e) {
+                        throw new IllegalStateException("复制 part 失败", e);
+                    }
+                    return null;
+                }, sourceId);
+    }
+
     public Message appendUser(String sessionId, List<Part> parts) {
         return append(sessionId, "user", parts);
     }
@@ -128,12 +220,12 @@ public class MessageStore {
                 .collect(Collectors.toList());
     }
 
-    /** 消息是否已被压缩（data.compacted 标记或含 Compaction part 之前的历史）。 */
+    /** 消息是否已被压缩/回退（compacted 或 rewound 标记）。 */
     private boolean isCompacted(Message m) {
         try {
             String data = jdbc.queryForObject(
                     "SELECT data FROM message WHERE id=?", String.class, m.id());
-            return data != null && data.contains("\"compacted\":true");
+            return data != null && (data.contains("\"compacted\":true") || data.contains("\"rewound\":true"));
         } catch (Exception e) {
             return false;
         }

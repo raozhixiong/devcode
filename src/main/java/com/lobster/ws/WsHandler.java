@@ -99,6 +99,10 @@ public class WsHandler extends TextWebSocketHandler {
             case "agents.list" -> agentsList(session, id);
             case "agents.create" -> agentsCreate(session, id, params);
             case "queue.mode.set" -> queueModeSet(session, id, params);
+            case "sessions.archive" -> sessionArchive(session, id, params);
+            case "sessions.rename" -> sessionRename(session, id, params);
+            case "sessions.fork" -> sessionFork(session, id, params);
+            case "sessions.rewind" -> sessionRewind(session, id, params);
             default -> {
                 ObjectNode err = OM.createObjectNode();
                 err.put("code", "METHOD_NOT_FOUND");
@@ -132,6 +136,40 @@ public class WsHandler extends TextWebSocketHandler {
             err.put("message", "未知队列模式: " + mode);
             sendRes(session, id, false, err);
         }
+    }
+
+    /** sessions.archive：{sessionKey}。 */
+    private void sessionArchive(WebSocketSession session, String id, JsonNode params) {
+        var s = store.findByKey(params.path("sessionKey").asText("main")).orElse(null);
+        if (s == null) { sendRes(session, id, false, OM.createObjectNode().put("code","NOT_FOUND")); return; }
+        store.archive(s.id());
+        sendRes(session, id, true, OM.createObjectNode().put("archived", true));
+    }
+
+    /** sessions.rename：{sessionKey, title}。 */
+    private void sessionRename(WebSocketSession session, String id, JsonNode params) {
+        var s = store.findByKey(params.path("sessionKey").asText("main")).orElse(null);
+        if (s == null) { sendRes(session, id, false, OM.createObjectNode().put("code","NOT_FOUND")); return; }
+        store.setTitle(s.id(), params.path("title").asText());
+        sendRes(session, id, true, OM.createObjectNode().put("renamed", true));
+    }
+
+    /** sessions.fork：{sessionKey, upToMessageId, newKey}。 */
+    private void sessionFork(WebSocketSession session, String id, JsonNode params) {
+        var s = store.findByKey(params.path("sessionKey").asText("main")).orElse(null);
+        if (s == null) { sendRes(session, id, false, OM.createObjectNode().put("code","NOT_FOUND")); return; }
+        var forked = store.fork(s.id(), params.path("upToMessageId").asText(),
+                params.path("newKey").asText("fork-" + System.currentTimeMillis()));
+        sendRes(session, id, true, OM.createObjectNode()
+                .put("id", forked.id()).put("sessionKey", forked.sessionKey()));
+    }
+
+    /** sessions.rewind：{sessionKey, upToMessageId}。 */
+    private void sessionRewind(WebSocketSession session, String id, JsonNode params) {
+        var s = store.findByKey(params.path("sessionKey").asText("main")).orElse(null);
+        if (s == null) { sendRes(session, id, false, OM.createObjectNode().put("code","NOT_FOUND")); return; }
+        store.rewind(s.id(), params.path("upToMessageId").asText());
+        sendRes(session, id, true, OM.createObjectNode().put("rewound", true));
     }
 
     /** agents.list：全部 agent（角色实例）。 */
