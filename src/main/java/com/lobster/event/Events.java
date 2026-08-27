@@ -27,6 +27,12 @@ public final class Events {
     public static final String WORKBOARD_CHANGED = "workboard.changed";
     public static final String CRON_CHANGED = "cron.changed";
     public static final String SKILLS_CHANGED = "skills.changed";
+    public static final String CONNECT_CHALLENGE = "connect.challenge";
+    public static final String AUTH_USER_CHANGED = "auth.user.changed";
+    public static final String AUTH_TOKEN_REVOKED = "auth.token.revoked";
+    public static final String DEVICE_PAIR_REQUESTED = "device.pair.requested";
+    public static final String DEVICE_PAIR_RESOLVED = "device.pair.resolved";
+    public static final String DEVICE_CHANGED = "device.changed";
 
     private Events() {}
 }

@@ -5,7 +5,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.lobster.agent.AgentLoop;
+import com.lobster.auth.AuthInfo;
+import com.lobster.auth.AuthService;
 import com.lobster.event.EventBus;
+import com.lobster.event.Events;
 import com.lobster.event.LobsterEvent;
 import com.lobster.model.Message;
 import com.lobster.model.Part;
@@ -20,6 +23,7 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /** WS 帧协议处理器：req/res/event。 */
@@ -44,8 +48,13 @@ public class WsHandler extends TextWebSocketHandler {
     private final com.lobster.store.DreamingSweep dreaming;
     private final com.lobster.store.UsageStore usage;
     private final com.lobster.store.SkillsStore skills;
+    private final AuthService authService;
     private final Map<WebSocketSession, Runnable> unsubscribes = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
+    private final Map<String, AuthInfo> authBySession = new ConcurrentHashMap<>();
+
+    private static final Set<String> AUTH_ALLOWED_METHODS =
+            Set.of("connect", "auth.bootstrap", "auth.login");
 
     public WsHandler(MessageStore store, EventBus bus, AgentLoop loop,
                      com.lobster.permission.PermissionEngine permissions,
@@ -59,7 +68,8 @@ public class WsHandler extends TextWebSocketHandler {
                      com.lobster.store.MemoryStore memory,
                      com.lobster.store.DreamingSweep dreaming,
                      com.lobster.store.UsageStore usage,
-                     com.lobster.store.SkillsStore skills) {
+                     com.lobster.store.SkillsStore skills,
+                     AuthService authService) {
         this.store = store;
         this.bus = bus;
         this.loop = loop;
@@ -75,6 +85,7 @@ public class WsHandler extends TextWebSocketHandler {
         this.dreaming = dreaming;
         this.usage = usage;
         this.skills = skills;
+        this.authService = authService;
     }
 
     @Override
@@ -83,15 +94,26 @@ public class WsHandler extends TextWebSocketHandler {
         // 全局事件转发为 event 帧
         Runnable unsub = bus.subscribeAll(e -> sendEvent(session, e));
         unsubscribes.put(session, unsub);
-        // 连接即视为 connect 成功（M1 免鉴权）
-        sendRes(session, "connect", true, OM.createObjectNode()
-                .put("protocol", 1)
-                .set("policy", OM.createObjectNode().put("maxPayload", 1048576)));
+        if (authService.isAuthRequired()) {
+            // 发送 challenge 事件，客户端需发 connect req 携带 token
+            sendEvent(session, new LobsterEvent(Events.CONNECT_CHALLENGE, "",
+                    OM.createObjectNode()
+                            .put("authRequired", true)
+                            .put("nonce", java.util.UUID.randomUUID().toString())
+                            .put("ts", System.currentTimeMillis()), false));
+        } else {
+            // 免鉴权模式（首次启动 / 无用户），直接发 connect-res
+            sendRes(session, "connect", true, OM.createObjectNode()
+                    .put("protocol", 1)
+                    .put("authRequired", false)
+                    .set("policy", OM.createObjectNode().put("maxPayload", 1048576)));
+        }
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         sessions.remove(session.getId());
+        authBySession.remove(session.getId());
         Runnable unsub = unsubscribes.remove(session);
         if (unsub != null) unsub.run();
     }
@@ -116,8 +138,17 @@ public class WsHandler extends TextWebSocketHandler {
     }
 
     private void handleReq(WebSocketSession session, String id, String method, JsonNode params) throws Exception {
+        // 鉴权闸门：auth required 且未认证时只允许 connect/auth.bootstrap/auth.login
+        if (authService.isAuthRequired() && !authBySession.containsKey(session.getId())
+                && !AUTH_ALLOWED_METHODS.contains(method)) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "UNAUTHORIZED");
+            err.put("message", "请先认证");
+            sendRes(session, id, false, err);
+            return;
+        }
         switch (method) {
-            case "connect" -> sendRes(session, id, true, OM.createObjectNode().put("protocol", 1));
+            case "connect" -> connectAuth(session, id, params);
             case "chat.send" -> chatSend(session, id, params);
             case "chat.history" -> chatHistory(session, id, params);
             case "sessions.list" -> sessionsList(session, id);
@@ -162,6 +193,18 @@ public class WsHandler extends TextWebSocketHandler {
             case "skills.get" -> skillsGet(session, id, params);
             case "skills.setEnabled" -> skillsSetEnabled(session, id, params);
             case "skills.install" -> skillsInstall(session, id, params);
+            case "auth.bootstrap" -> authBootstrap(session, id, params);
+            case "auth.login" -> authLogin(session, id, params);
+            case "auth.users.list" -> authUsersList(session, id);
+            case "auth.users.create" -> authUsersCreate(session, id, params);
+            case "auth.token.revoke" -> authTokenRevoke(session, id, params);
+            case "device.pair.request" -> devicePairRequest(session, id, params);
+            case "device.pair.approve" -> devicePairApprove(session, id, params);
+            case "device.pair.reject" -> devicePairReject(session, id, params);
+            case "device.pair.status" -> devicePairStatus(session, id);
+            case "device.list" -> deviceList(session, id);
+            case "device.revoke" -> deviceRevoke(session, id, params);
+            case "device.rename" -> deviceRename(session, id, params);
             default -> {
                 ObjectNode err = OM.createObjectNode();
                 err.put("code", "METHOD_NOT_FOUND");
@@ -837,6 +880,232 @@ public class WsHandler extends TextWebSocketHandler {
                         .put("requestId", requestId)
                         .put("decision", decision == null || decision.isEmpty() ? "REJECT" : decision), false));
         sendRes(session, id, true, OM.createObjectNode().put("requestId", requestId));
+    }
+
+    // ==================== M5 认证 / 设备配对 ====================
+
+    private void connectAuth(WebSocketSession session, String id, JsonNode params) {
+        if (!authService.isAuthRequired()) {
+            sendRes(session, id, true, OM.createObjectNode()
+                    .put("protocol", 1)
+                    .put("authRequired", false)
+                    .set("policy", OM.createObjectNode().put("maxPayload", 1048576)));
+            return;
+        }
+        String token = params.path("token").asText("");
+        if (token.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "UNAUTHORIZED");
+            err.put("message", "请提供 token");
+            sendRes(session, id, false, err);
+            return;
+        }
+        var authInfo = authService.validateToken(token);
+        if (authInfo.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "UNAUTHORIZED");
+            err.put("message", "令牌无效或已过期");
+            sendRes(session, id, false, err);
+            return;
+        }
+        authBySession.put(session.getId(), authInfo.get());
+        ObjectNode payload = OM.createObjectNode()
+                .put("protocol", 1)
+                .put("authRequired", true);
+        ObjectNode auth = OM.createObjectNode()
+                .put("userId", authInfo.get().userId())
+                .put("username", authInfo.get().username())
+                .put("role", authInfo.get().role())
+                .put("scopes", authInfo.get().scopes());
+        payload.set("auth", auth);
+        payload.set("policy", OM.createObjectNode().put("maxPayload", 1048576));
+        sendRes(session, id, true, payload);
+    }
+
+    private void authBootstrap(WebSocketSession session, String id, JsonNode params) {
+        if (authService.userCount() > 0) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "CONFLICT").put("message", "系统已初始化");
+            sendRes(session, id, false, err);
+            return;
+        }
+        String username = params.path("username").asText();
+        String displayName = params.path("displayName").asText(username);
+        String password = params.path("password").asText();
+        String role = params.path("role").asText("admin");
+        if (username.isEmpty() || password.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "username 和 password 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        var result = authService.bootstrap(username, displayName, password, role);
+        // 自动认证 bootstrap 调用者
+        authService.validateToken(result.token())
+                .ifPresent(info -> authBySession.put(session.getId(), info));
+        ObjectNode payload = OM.createObjectNode()
+                .put("token", result.token())
+                .put("userId", result.user().id())
+                .put("username", result.user().username())
+                .put("role", result.user().role());
+        sendRes(session, id, true, payload);
+    }
+
+    private void authLogin(WebSocketSession session, String id, JsonNode params) {
+        String username = params.path("username").asText();
+        String password = params.path("password").asText();
+        if (username.isEmpty() || password.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "username 和 password 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        try {
+            var result = authService.login(username, password);
+            // 自动认证 login 调用者
+            authService.validateToken(result.token())
+                    .ifPresent(info -> authBySession.put(session.getId(), info));
+            ObjectNode payload = OM.createObjectNode()
+                    .put("token", result.token())
+                    .put("userId", result.user().id())
+                    .put("username", result.user().username())
+                    .put("role", result.user().role());
+            sendRes(session, id, true, payload);
+        } catch (Exception e) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "UNAUTHORIZED").put("message", e.getMessage());
+            sendRes(session, id, false, err);
+        }
+    }
+
+    private void authUsersList(WebSocketSession session, String id) {
+        var users = authService.users().list();
+        ArrayNode arr = OM.valueToTree(users);
+        sendRes(session, id, true, OM.createObjectNode().set("users", arr));
+    }
+
+    private void authUsersCreate(WebSocketSession session, String id, JsonNode params) {
+        String username = params.path("username").asText();
+        String displayName = params.path("displayName").asText(username);
+        String email = params.path("email").asText(null);
+        String password = params.path("password").asText();
+        String role = params.path("role").asText("developer");
+        if (username.isEmpty() || password.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "username 和 password 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        try {
+            var user = authService.createUser(username, displayName, email, password, role);
+            ObjectNode payload = OM.createObjectNode()
+                    .put("userId", user.id())
+                    .put("username", user.username())
+                    .put("role", user.role());
+            sendRes(session, id, true, payload);
+        } catch (Exception e) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "CONFLICT").put("message", e.getMessage());
+            sendRes(session, id, false, err);
+        }
+    }
+
+    private void authTokenRevoke(WebSocketSession session, String id, JsonNode params) {
+        String tokenId = params.path("tokenId").asText();
+        if (tokenId.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "tokenId 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        authService.revokeToken(tokenId);
+        sendRes(session, id, true, OM.createObjectNode().put("tokenId", tokenId));
+    }
+
+    private void devicePairRequest(WebSocketSession session, String id, JsonNode params) {
+        String label = params.path("label").asText(null);
+        String publicKey = params.path("publicKey").asText("");
+        String platform = params.path("platform").asText(null);
+        String scopes = params.path("scopes").asText("read");
+        var pairing = authService.devices().createPairing(label, publicKey, platform, scopes);
+        ObjectNode payload = OM.createObjectNode()
+                .put("pairingId", pairing.id())
+                .put("status", pairing.status());
+        sendRes(session, id, true, payload);
+    }
+
+    private void devicePairApprove(WebSocketSession session, String id, JsonNode params) {
+        String pairingId = params.path("pairingId").asText();
+        String label = params.path("label").asText(null);
+        String publicKey = params.path("publicKey").asText("");
+        String platform = params.path("platform").asText(null);
+        String role = params.path("role").asText("developer");
+        if (pairingId.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "pairingId 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        var device = authService.devices().resolvePairing(pairingId, true, label, publicKey, platform, role);
+        if (device.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "NOT_FOUND").put("message", "配对请求不存在或已处理");
+            sendRes(session, id, false, err);
+            return;
+        }
+        ObjectNode payload = OM.createObjectNode()
+                .put("deviceId", device.get().id())
+                .put("status", "approved");
+        sendRes(session, id, true, payload);
+    }
+
+    private void devicePairReject(WebSocketSession session, String id, JsonNode params) {
+        String pairingId = params.path("pairingId").asText();
+        if (pairingId.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "pairingId 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        authService.devices().resolvePairing(pairingId, false, null, null, null, null);
+        sendRes(session, id, true, OM.createObjectNode().put("pairingId", pairingId).put("status", "rejected"));
+    }
+
+    private void devicePairStatus(WebSocketSession session, String id) {
+        var pending = authService.devices().listPendingPairings();
+        ArrayNode arr = OM.valueToTree(pending);
+        sendRes(session, id, true, OM.createObjectNode().set("pending", arr));
+    }
+
+    private void deviceList(WebSocketSession session, String id) {
+        var devices = authService.devices().list();
+        ArrayNode arr = OM.valueToTree(devices);
+        sendRes(session, id, true, OM.createObjectNode().set("devices", arr));
+    }
+
+    private void deviceRevoke(WebSocketSession session, String id, JsonNode params) {
+        String deviceId = params.path("deviceId").asText();
+        if (deviceId.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "deviceId 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        authService.devices().revoke(deviceId);
+        sendRes(session, id, true, OM.createObjectNode().put("deviceId", deviceId));
+    }
+
+    private void deviceRename(WebSocketSession session, String id, JsonNode params) {
+        String deviceId = params.path("deviceId").asText();
+        String label = params.path("label").asText();
+        if (deviceId.isEmpty() || label.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "deviceId 和 label 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        authService.devices().rename(deviceId, label);
+        sendRes(session, id, true, OM.createObjectNode().put("deviceId", deviceId).put("label", label));
     }
 
     private void sendRes(WebSocketSession session, String id, boolean ok, JsonNode payload) {

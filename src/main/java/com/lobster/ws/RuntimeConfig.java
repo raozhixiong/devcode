@@ -99,6 +99,31 @@ public class RuntimeConfig {
     }
 
     @Bean
+    public com.lobster.store.UserStore userStore(javax.sql.DataSource sharedDataSource, EventBus bus) {
+        return new com.lobster.store.UserStore(
+                new org.springframework.jdbc.core.JdbcTemplate(sharedDataSource), bus);
+    }
+
+    @Bean
+    public com.lobster.store.AuthTokenStore authTokenStore(javax.sql.DataSource sharedDataSource, EventBus bus) {
+        return new com.lobster.store.AuthTokenStore(
+                new org.springframework.jdbc.core.JdbcTemplate(sharedDataSource), bus);
+    }
+
+    @Bean
+    public com.lobster.store.DeviceStore deviceStore(javax.sql.DataSource sharedDataSource, EventBus bus) {
+        return new com.lobster.store.DeviceStore(
+                new org.springframework.jdbc.core.JdbcTemplate(sharedDataSource), bus);
+    }
+
+    @Bean
+    public com.lobster.auth.AuthService authService(com.lobster.store.UserStore userStore,
+                                                     com.lobster.store.AuthTokenStore authTokenStore,
+                                                     com.lobster.store.DeviceStore deviceStore) {
+        return new com.lobster.auth.AuthService(userStore, authTokenStore, deviceStore);
+    }
+
+    @Bean
     public MessageStore messageStore(AgentDb mainAgentDb) {
         return new MessageStore(mainAgentDb);
     }
