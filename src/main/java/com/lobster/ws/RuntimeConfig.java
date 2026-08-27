@@ -47,6 +47,11 @@ public class RuntimeConfig {
     }
 
     @Bean
+    public com.lobster.store.SessionStateService sessionStateService(AgentDb mainAgentDb, EventBus bus) {
+        return new com.lobster.store.SessionStateService(mainAgentDb, bus);
+    }
+
+    @Bean
     public MessageStore messageStore(AgentDb mainAgentDb) {
         return new MessageStore(mainAgentDb);
     }

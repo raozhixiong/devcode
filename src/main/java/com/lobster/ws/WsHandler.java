@@ -36,6 +36,7 @@ public class WsHandler extends TextWebSocketHandler {
     private final com.lobster.store.InboxStore inbox;
     private final com.lobster.rbac.AgentRegistry agents;
     private final com.lobster.store.SessionOwnership ownership;
+    private final com.lobster.store.SessionStateService stateService;
     private final Map<WebSocketSession, Runnable> unsubscribes = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
 
@@ -43,7 +44,8 @@ public class WsHandler extends TextWebSocketHandler {
                      com.lobster.permission.PermissionEngine permissions,
                      com.lobster.store.InboxStore inbox,
                      com.lobster.rbac.AgentRegistry agents,
-                     com.lobster.store.SessionOwnership ownership) {
+                     com.lobster.store.SessionOwnership ownership,
+                     com.lobster.store.SessionStateService stateService) {
         this.store = store;
         this.bus = bus;
         this.loop = loop;
@@ -51,6 +53,7 @@ public class WsHandler extends TextWebSocketHandler {
         this.inbox = inbox;
         this.agents = agents;
         this.ownership = ownership;
+        this.stateService = stateService;
     }
 
     @Override
@@ -108,6 +111,8 @@ public class WsHandler extends TextWebSocketHandler {
             case "sessions.rewind" -> sessionRewind(session, id, params);
             case "sessions.assignOwner" -> sessionAssignOwner(session, id, params);
             case "sessions.participants" -> sessionParticipants(session, id, params);
+            case "sessions.state" -> sessionState(session, id, params);
+            case "sessions.changesSince" -> sessionChangesSince(session, id, params);
             default -> {
                 ObjectNode err = OM.createObjectNode();
                 err.put("code", "METHOD_NOT_FOUND");
@@ -175,6 +180,32 @@ public class WsHandler extends TextWebSocketHandler {
         if (s == null) { sendRes(session, id, false, OM.createObjectNode().put("code","NOT_FOUND")); return; }
         store.rewind(s.id(), params.path("upToMessageId").asText());
         sendRes(session, id, true, OM.createObjectNode().put("rewound", true));
+    }
+
+    /** sessions.state：{sessionKey} -> 当前 stateVersion。 */
+    private void sessionState(WebSocketSession session, String id, JsonNode params) {
+        var s = store.findByKey(params.path("sessionKey").asText("main")).orElse(null);
+        if (s == null) { sendRes(session, id, false, OM.createObjectNode().put("code","NOT_FOUND")); return; }
+        sendRes(session, id, true, OM.createObjectNode()
+                .put("stateVersion", stateService.getVersion(s.id())));
+    }
+
+    /** sessions.changesSince：{sessionKey, since} -> 该版本之后的信号。 */
+    private void sessionChangesSince(WebSocketSession session, String id, JsonNode params) {
+        var s = store.findByKey(params.path("sessionKey").asText("main")).orElse(null);
+        if (s == null) { sendRes(session, id, false, OM.createObjectNode().put("code","NOT_FOUND")); return; }
+        long since = params.path("since").asLong(0);
+        ArrayNode arr = OM.createArrayNode();
+        for (var sig : stateService.changesSince(s.id(), since)) {
+            arr.add(OM.createObjectNode()
+                    .put("stateVersion", sig.stateVersion())
+                    .put("kind", sig.kind())
+                    .put("payload", sig.payload())
+                    .put("createdAt", sig.createdAt()));
+        }
+        sendRes(session, id, true, OM.createObjectNode()
+                .put("currentVersion", stateService.getVersion(s.id()))
+                .set("signals", arr));
     }
 
     /** sessions.assignOwner：{sessionKey, owner}。 */

@@ -66,8 +66,8 @@ com.lobster
 
 ## 未完成路线（优先级从高到低）
 
-1. ~~M2 内核补全~~ **已全部完成**（2026-08-27，46 测试全过）：真实 LLM、权限 WS、PromptAssembler、上下文压缩（TokenEstimator/compact 纪元/70% 溢出触发）、task 子代理、background_spawn 后台子代理 + announce、Plan 模式（PlanMode/plan_exit/mode.set）、输入收件箱、writer claim 围栏、doom loop、SSE 恢复
-2. **M3 多角色**：8 角色 RBAC、队列模式 steer/followup、会话 fork/rewind、三层归属、状态感知
+1. ~~M2 内核补全~~ **已全部完成**（2026-08-27，59 测试全过）：真实 LLM、权限 WS、PromptAssembler、上下文压缩、task 子代理、background_spawn + announce、Plan 模式、输入收件箱、writer claim 围栏、doom loop、SSE 恢复
+2. ~~M3 多角色~~ **已全部完成**（2026-08-27）：8 角色 RBAC + 工具过滤、队列模式 steer/followup/collect/interrupt、会话 fork/rewind/归档/标题、三层归属、状态感知
 3. **M4 流程平台**：任务台账、Workboard 看板、Cron 调度、五层记忆+Dreaming、Usage 统计、Skills
 4. **M5 企业化**：频道接入（webhook/企微/钉钉/飞书）、审批中心、Docker 沙箱、审计、认证（当前 WS 免鉴权）、配置中心+插件
 5. **前端**：三栏工作台、类型感知工具卡片（diff/折叠）、会话树、斜杠命令/@补全/⌘K
