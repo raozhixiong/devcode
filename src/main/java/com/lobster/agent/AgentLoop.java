@@ -42,6 +42,7 @@ public class AgentLoop {
     private final java.util.Set<String> abortRequests = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private com.lobster.store.WriterClaimStore claims;
     private com.lobster.store.MemoryStore memoryStore;
+    private com.lobster.store.AuditStore auditStore;
     /** 角色工具过滤器（null = 不过滤）。 */
     private volatile java.util.function.Predicate<String> toolFilter;
     /** 当前 run 的 writer claim（run 内有效）。 */
@@ -67,6 +68,10 @@ public class AgentLoop {
 
     public void setMemoryStore(com.lobster.store.MemoryStore memoryStore) {
         this.memoryStore = memoryStore;
+    }
+
+    public void setAuditStore(com.lobster.store.AuditStore auditStore) {
+        this.auditStore = auditStore;
     }
 
     public void setToolFilter(java.util.function.Predicate<String> filter) {
@@ -120,6 +125,9 @@ public class AgentLoop {
             activeClaims.put(sessionId, claim);
         }
         publishStatus(sessionId, "busy");
+        if (auditStore != null) {
+            auditStore.record(agentId, "run.start", sessionId, agentId, "started", null);
+        }
         try {
             runLoop(sessionId);
             drainInbox(sessionId);
@@ -129,6 +137,9 @@ public class AgentLoop {
                 activeClaims.remove(sessionId);
             }
             busySessions.remove(sessionId);
+            if (auditStore != null) {
+                auditStore.record(agentId, "run.end", sessionId, agentId, "completed", null);
+            }
             bus.publish(new com.lobster.event.LobsterEvent(
                     Events.SESSION_IDLE, sessionId,
                     OM.createObjectNode(), false));

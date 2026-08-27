@@ -49,12 +49,13 @@ public class WsHandler extends TextWebSocketHandler {
     private final com.lobster.store.UsageStore usage;
     private final com.lobster.store.SkillsStore skills;
     private final AuthService authService;
+    private final com.lobster.store.AuditStore auditStore;
     private final Map<WebSocketSession, Runnable> unsubscribes = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, AuthInfo> authBySession = new ConcurrentHashMap<>();
 
     private static final Set<String> AUTH_ALLOWED_METHODS =
-            Set.of("connect", "auth.bootstrap", "auth.login");
+            Set.of("connect", "auth.bootstrap", "auth.login", "audit.activity.list");
 
     public WsHandler(MessageStore store, EventBus bus, AgentLoop loop,
                      com.lobster.permission.PermissionEngine permissions,
@@ -69,7 +70,8 @@ public class WsHandler extends TextWebSocketHandler {
                      com.lobster.store.DreamingSweep dreaming,
                      com.lobster.store.UsageStore usage,
                      com.lobster.store.SkillsStore skills,
-                     AuthService authService) {
+                     AuthService authService,
+                     com.lobster.store.AuditStore auditStore) {
         this.store = store;
         this.bus = bus;
         this.loop = loop;
@@ -86,6 +88,7 @@ public class WsHandler extends TextWebSocketHandler {
         this.usage = usage;
         this.skills = skills;
         this.authService = authService;
+        this.auditStore = auditStore;
     }
 
     @Override
@@ -205,6 +208,8 @@ public class WsHandler extends TextWebSocketHandler {
             case "device.list" -> deviceList(session, id);
             case "device.revoke" -> deviceRevoke(session, id, params);
             case "device.rename" -> deviceRename(session, id, params);
+            case "audit.activity.list" -> auditActivityList(session, id, params);
+            case "audit.run.inspect" -> auditRunInspect(session, id, params);
             default -> {
                 ObjectNode err = OM.createObjectNode();
                 err.put("code", "METHOD_NOT_FOUND");
@@ -940,6 +945,11 @@ public class WsHandler extends TextWebSocketHandler {
             return;
         }
         var result = authService.bootstrap(username, displayName, password, role);
+        audit("auth.bootstrap", null, "success",
+                OM.createObjectNode()
+                        .put("userId", result.user().id())
+                        .put("username", result.user().username())
+                        .put("role", result.user().role()).toString());
         // 自动认证 bootstrap 调用者
         authService.validateToken(result.token())
                 .ifPresent(info -> authBySession.put(session.getId(), info));
@@ -962,6 +972,10 @@ public class WsHandler extends TextWebSocketHandler {
         }
         try {
             var result = authService.login(username, password);
+            audit("auth.login", null, "success",
+                    OM.createObjectNode()
+                            .put("userId", result.user().id())
+                            .put("username", result.user().username()).toString());
             // 自动认证 login 调用者
             authService.validateToken(result.token())
                     .ifPresent(info -> authBySession.put(session.getId(), info));
@@ -1019,6 +1033,8 @@ public class WsHandler extends TextWebSocketHandler {
             return;
         }
         authService.revokeToken(tokenId);
+        audit("auth.token.revoke", null, "success",
+                OM.createObjectNode().put("tokenId", tokenId).toString());
         sendRes(session, id, true, OM.createObjectNode().put("tokenId", tokenId));
     }
 
@@ -1106,6 +1122,38 @@ public class WsHandler extends TextWebSocketHandler {
         }
         authService.devices().rename(deviceId, label);
         sendRes(session, id, true, OM.createObjectNode().put("deviceId", deviceId).put("label", label));
+    }
+
+    // ==================== M5 审计 ====================
+
+    private void auditActivityList(WebSocketSession session, String id, JsonNode params) {
+        String kindFilter = params.path("kind").asText(null);
+        int limit = params.path("limit").asInt(50);
+        Long beforeTs = params.path("beforeTs").asLong(0);
+        if (beforeTs == 0) beforeTs = null;
+        var events = auditStore.list(kindFilter, limit, beforeTs);
+        ArrayNode arr = OM.valueToTree(events);
+        sendRes(session, id, true, OM.createObjectNode().set("events", arr));
+    }
+
+    private void auditRunInspect(WebSocketSession session, String id, JsonNode params) {
+        String sessionKey = params.path("sessionKey").asText(null);
+        if (sessionKey == null || sessionKey.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "sessionKey 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        var events = auditStore.listBySession(sessionKey, 200);
+        ArrayNode arr = OM.valueToTree(events);
+        sendRes(session, id, true, OM.createObjectNode().set("events", arr));
+    }
+
+    private void audit(String kind, String sessionKey, String result, String meta) {
+        if (auditStore != null) {
+            String actor = null;
+            auditStore.record(actor, kind, sessionKey, "main", result, meta);
+        }
     }
 
     private void sendRes(WebSocketSession session, String id, boolean ok, JsonNode payload) {

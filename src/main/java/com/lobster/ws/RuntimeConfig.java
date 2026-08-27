@@ -124,6 +124,12 @@ public class RuntimeConfig {
     }
 
     @Bean
+    public com.lobster.store.AuditStore auditStore(javax.sql.DataSource sharedDataSource) {
+        return new com.lobster.store.AuditStore(
+                new org.springframework.jdbc.core.JdbcTemplate(sharedDataSource));
+    }
+
+    @Bean
     public MessageStore messageStore(AgentDb mainAgentDb) {
         return new MessageStore(mainAgentDb);
     }
@@ -172,7 +178,8 @@ public class RuntimeConfig {
     public AgentLoop agentLoop(MessageStore store, EventBus bus, PermissionEngine permissions,
                                LobsterConfig config, com.lobster.store.InboxStore inbox,
                                AgentDb mainAgentDb, com.lobster.store.TaskStore taskStore,
-                               com.lobster.store.MemoryStore memoryStore) {
+                               com.lobster.store.MemoryStore memoryStore,
+                               com.lobster.store.AuditStore auditStore) {
         var tools = ToolRegistry.of(
                 new ReadTool(), new WriteTool(), new EditTool(),
                 new GlobTool(), new GrepTool(), new BashTool(),
@@ -198,6 +205,7 @@ public class RuntimeConfig {
         tools.register(new com.lobster.tool.builtin.BackgroundSpawnTool(store, bus, loop, taskStore));
         tools.register(new com.lobster.tool.builtin.MemorySearchTool(memoryStore));
         loop.setMemoryStore(memoryStore);
+        loop.setAuditStore(auditStore);
         return loop;
     }
 
