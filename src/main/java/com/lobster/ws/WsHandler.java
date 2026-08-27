@@ -92,6 +92,7 @@ public class WsHandler extends TextWebSocketHandler {
             case "chat.history" -> chatHistory(session, id, params);
             case "sessions.list" -> sessionsList(session, id);
             case "permission.respond" -> permissionRespond(session, id, params);
+            case "mode.set" -> modeSet(session, id, params);
             default -> {
                 ObjectNode err = OM.createObjectNode();
                 err.put("code", "METHOD_NOT_FOUND");
@@ -99,6 +100,25 @@ public class WsHandler extends TextWebSocketHandler {
                 sendRes(session, id, false, err);
             }
         }
+    }
+
+    /** Plan/Build 模式切换：mode.set {sessionKey, mode: "plan"|"build"}。 */
+    private void modeSet(WebSocketSession session, String id, JsonNode params) {
+        String sessionKey = params.path("sessionKey").asText("main");
+        String mode = params.path("mode").asText("build");
+        var s = store.findByKey(sessionKey).orElse(null);
+        if (s == null) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "SESSION_NOT_FOUND");
+            err.put("message", "会话不存在: " + sessionKey);
+            sendRes(session, id, false, err);
+            return;
+        }
+        boolean plan = "plan".equals(mode);
+        loop.planMode().setPlan(s.id(), plan);
+        bus.publish(new LobsterEvent(com.lobster.event.Events.MODE_SWITCHED, s.id(),
+                OM.createObjectNode().put("mode", plan ? "plan" : "build"), true));
+        sendRes(session, id, true, OM.createObjectNode().put("mode", plan ? "plan" : "build"));
     }
 
     private void chatSend(WebSocketSession session, String id, JsonNode params) {

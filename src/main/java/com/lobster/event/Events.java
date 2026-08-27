@@ -17,6 +17,7 @@ public final class Events {
     public static final String PERMISSION_REPLIED = "permission.replied";
     public static final String COMPACTION_STARTED = "session.next.compaction.started";
     public static final String COMPACTION_ENDED = "session.next.compaction.ended";
+    public static final String MODE_SWITCHED = "session.mode.switched";
 
     private Events() {}
 }

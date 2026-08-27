@@ -103,6 +103,7 @@ public class RuntimeConfig {
         var loop = new AgentLoop(store, bus, tools, permissions, llm, "main", model, inbox);
         // task 子代理工具需引用 loop（子会话复用同一 loop 实例）
         tools.register(new com.lobster.tool.builtin.TaskTool(store, loop));
+        tools.register(new com.lobster.tool.builtin.PlanExitTool(loop.planMode()));
         return loop;
     }
 

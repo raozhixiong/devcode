@@ -159,5 +159,25 @@
   sendBtn.addEventListener("click", submit);
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
 
+  // Plan 模式切换
+  const planToggle = document.getElementById("planToggle");
+  let planOn = false;
+  planToggle.addEventListener("click", () => {
+    planOn = !planOn;
+    send("mode.set", { sessionKey: "main", mode: planOn ? "plan" : "build" });
+    planToggle.textContent = "Plan: " + (planOn ? "开" : "关");
+    planToggle.classList.toggle("on", planOn);
+    sys(planOn ? "已进入 Plan 模式：只读调研与规划，计划写入 plans/*.md 后调用 plan_exit 交接"
+               : "已切换回 Build 模式");
+  });
+
+  function sys(text) {
+    const el = document.createElement("div");
+    el.className = "msg sys";
+    el.textContent = text;
+    messages.appendChild(el);
+    scroll();
+  }
+
   connect();
 })();

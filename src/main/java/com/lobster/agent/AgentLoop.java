@@ -36,6 +36,9 @@ public class AgentLoop {
     private final PromptAssembler promptAssembler;
     private final java.util.Set<String> busySessions = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final com.lobster.store.InboxStore inbox;
+    private final PlanMode planMode = new PlanMode();
+
+    public PlanMode planMode() { return planMode; }
 
     public AgentLoop(MessageStore store, EventBus bus, ToolRegistry tools,
                      PermissionEngine permissions, LlmProvider llm,
@@ -183,7 +186,7 @@ public class AgentLoop {
             // 组装请求
             List<LlmProvider.ToolSpec> toolSpecs = toolSpecs();
             String system = promptAssembler.assemble(toolSpecs);
-            List<LlmProvider.ChatMsg> messages = toChatMessages(history);
+            List<LlmProvider.ChatMsg> messages = toChatMessages(history, sessionId);
 
             // 消费 LLM 流
             List<LlmEvent.ToolCall> toolCalls = new ArrayList<>();
@@ -261,6 +264,24 @@ public class AgentLoop {
     }
 
     private void executeTool(String sessionId, String assistantMessageId, LlmEvent.ToolCall call) {
+        // Plan 模式权限裁剪：写/执行类工具禁用（write 例外：仅 plans/*.md）
+        if (planMode.isToolDenied(sessionId, call.name())) {
+            store.addPart(assistantMessageId, new Part.Tool(call.name(), call.callId(),
+                    new Part.ToolState.Error("Plan 模式：工具 " + call.name() + " 已被裁剪禁用")));
+            publishToolFailed(sessionId, call, "Plan 模式裁剪");
+            return;
+        }
+        if (planMode.isPlan(sessionId) && "write".equals(call.name())) {
+            String target = planWriteTarget(call);
+            if (target == null || !target.replace('\\', '/').startsWith("plans/")
+                    || !target.endsWith(".md")) {
+                store.addPart(assistantMessageId, new Part.Tool(call.name(), call.callId(),
+                        new Part.ToolState.Error("Plan 模式：write 仅允许 plans/*.md，实际: " + target)));
+                publishToolFailed(sessionId, call, "Plan 模式 write 裁剪");
+                return;
+            }
+        }
+
         Tool tool = tools.get(call.name());
         if (tool == null) {
             store.addPart(assistantMessageId, new Part.Tool(call.name(), call.callId(),
@@ -303,6 +324,16 @@ public class AgentLoop {
             store.updateToolState(assistantMessageId, call.callId(),
                     new Part.ToolState.Error(msg));
             publishToolFailed(sessionId, call, msg);
+        }
+    }
+
+    /** Plan 模式 write 放行判定：取 file_path 参数。 */
+    private String planWriteTarget(LlmEvent.ToolCall call) {
+        try {
+            JsonNode args = OM.readTree(call.argumentsJson().isEmpty() ? "{}" : call.argumentsJson());
+            return args.path("file_path").asText(null);
+        } catch (Exception e) {
+            return null;
         }
     }
 
@@ -349,14 +380,20 @@ public class AgentLoop {
         return specs;
     }
 
-    private List<LlmProvider.ChatMsg> toChatMessages(List<com.lobster.model.Message> history) {
+    private List<LlmProvider.ChatMsg> toChatMessages(List<com.lobster.model.Message> history, String sessionId) {
         List<LlmProvider.ChatMsg> out = new ArrayList<>();
-        for (var m : history) {
+        String planReminder = planMode.reminder(sessionId);
+        for (int i = 0; i < history.size(); i++) {
+            var m = history.get(i);
             if ("user".equals(m.role())) {
                 String text = m.parts().stream()
                         .filter(p -> p instanceof Part.Text)
                         .map(p -> ((Part.Text) p).text())
                         .reduce("", (a, b) -> a + b);
+                // Plan reminder 注入最后一条 user 消息（synthetic 后缀）
+                if (planReminder != null && i == history.size() - 1 && !text.isEmpty()) {
+                    text = text + "\n\n" + planReminder;
+                }
                 if (!text.isEmpty()) out.add(LlmProvider.ChatMsg.user(text));
                 // 工具结果 part 转为 tool 消息
                 for (Part p : m.parts()) {
