@@ -165,7 +165,8 @@ public class AgentLoop {
         // 权限：pattern 取工具名与首个参数值（M1 简化）
         String firstArg = firstArgValue(call);
         PermissionReply reply = permissions.ask(call.name(),
-                List.of(call.name() + ":" + (firstArg == null ? "*" : firstArg), firstArg == null ? "*" : firstArg));
+                List.of(call.name() + ":" + (firstArg == null ? "*" : firstArg), firstArg == null ? "*" : firstArg),
+                sessionId);
         if (!reply.allowed()) {
             store.addPart(assistantMessageId, new Part.Tool(call.name(), call.callId(),
                     new Part.ToolState.Error("权限拒绝: " + reply.feedback())));

@@ -71,7 +71,34 @@
         streamingText = null;
         setBusy(false);
         break;
+      case "permission.asked":
+        showPermissionDialog(p.requestId, p.permission, p.patterns || []);
+        break;
     }
+  }
+
+  function showPermissionDialog(requestId, permission, patterns) {
+    // 同一时间只保留一个弹窗
+    document.querySelectorAll(".perm-dialog").forEach((d) => d.remove());
+    const dlg = document.createElement("div");
+    dlg.className = "perm-dialog";
+    dlg.innerHTML =
+      '<div class="perm-title">🔐 权限请求: <b></b></div>' +
+      '<div class="perm-patterns"></div>' +
+      '<div class="perm-btns">' +
+      '<button data-d="ALLOW_ALWAYS">始终允许</button>' +
+      '<button data-d="ALLOW_ONCE">仅此一次</button>' +
+      '<button data-d="REJECT" class="deny">拒绝</button></div>';
+    dlg.querySelector("b").textContent = permission;
+    dlg.querySelector(".perm-patterns").textContent = patterns.join("\n");
+    dlg.querySelectorAll("button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        send("permission.respond", { requestId, decision: btn.dataset.d });
+        dlg.remove();
+      });
+    });
+    messages.appendChild(dlg);
+    scroll();
   }
 
   function bubble(cls, text) {

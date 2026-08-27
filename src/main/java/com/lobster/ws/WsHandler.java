@@ -32,13 +32,16 @@ public class WsHandler extends TextWebSocketHandler {
     private final MessageStore store;
     private final EventBus bus;
     private final AgentLoop loop;
+    private final com.lobster.permission.PermissionEngine permissions;
     private final Map<WebSocketSession, Runnable> unsubscribes = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
 
-    public WsHandler(MessageStore store, EventBus bus, AgentLoop loop) {
+    public WsHandler(MessageStore store, EventBus bus, AgentLoop loop,
+                     com.lobster.permission.PermissionEngine permissions) {
         this.store = store;
         this.bus = bus;
         this.loop = loop;
+        this.permissions = permissions;
     }
 
     @Override
@@ -85,6 +88,7 @@ public class WsHandler extends TextWebSocketHandler {
             case "chat.send" -> chatSend(session, id, params);
             case "chat.history" -> chatHistory(session, id, params);
             case "sessions.list" -> sessionsList(session, id);
+            case "permission.respond" -> permissionRespond(session, id, params);
             default -> {
                 ObjectNode err = OM.createObjectNode();
                 err.put("code", "METHOD_NOT_FOUND");
@@ -139,6 +143,23 @@ public class WsHandler extends TextWebSocketHandler {
         ArrayNode list = OM.createArrayNode();
         payload.set("sessions", list);
         sendRes(session, id, true, payload);
+    }
+
+    private void permissionRespond(WebSocketSession session, String id, JsonNode params) {
+        String requestId = params.path("requestId").asText();
+        String decision = params.path("decision").asText();
+        if (requestId.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "requestId 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        permissions.reply(requestId, RuntimeConfig.toReply(decision));
+        bus.publish(new LobsterEvent(com.lobster.event.Events.PERMISSION_REPLIED, null,
+                OM.createObjectNode()
+                        .put("requestId", requestId)
+                        .put("decision", decision == null || decision.isEmpty() ? "REJECT" : decision), false));
+        sendRes(session, id, true, OM.createObjectNode().put("requestId", requestId));
     }
 
     private void sendRes(WebSocketSession session, String id, boolean ok, JsonNode payload) {

@@ -52,6 +52,17 @@ public class PermissionEngine {
         };
     }
 
+    /** 带 sessionId 的 ask：事件路由到对应会话。 */
+    public PermissionReply ask(String permission, List<String> patterns, String sessionId) {
+        var req = new PermissionRequest(permission, patterns, sessionId);
+        var action = evaluateFirst(permission, patterns);
+        return switch (action) {
+            case DENY -> new PermissionReply(PermissionReply.Decision.REJECT, "规则拒绝");
+            case ALLOW -> new PermissionReply(PermissionReply.Decision.ALLOW_ONCE, null);
+            case ASK -> suspend(req);
+        };
+    }
+
     /** 异步 ask：返回 requestId（引擎生成）供 reply 使用。 */
     public String askAsyncId(String permission, List<String> patterns) {
         var req = new PermissionRequest(permission, patterns);
