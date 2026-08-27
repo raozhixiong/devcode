@@ -50,6 +50,7 @@ public class WsHandler extends TextWebSocketHandler {
     private final com.lobster.store.SkillsStore skills;
     private final AuthService authService;
     private final com.lobster.store.AuditStore auditStore;
+    private final com.lobster.store.ApprovalStore approvalStore;
     private final Map<WebSocketSession, Runnable> unsubscribes = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, AuthInfo> authBySession = new ConcurrentHashMap<>();
@@ -71,7 +72,8 @@ public class WsHandler extends TextWebSocketHandler {
                      com.lobster.store.UsageStore usage,
                      com.lobster.store.SkillsStore skills,
                      AuthService authService,
-                     com.lobster.store.AuditStore auditStore) {
+                     com.lobster.store.AuditStore auditStore,
+                     com.lobster.store.ApprovalStore approvalStore) {
         this.store = store;
         this.bus = bus;
         this.loop = loop;
@@ -89,6 +91,7 @@ public class WsHandler extends TextWebSocketHandler {
         this.skills = skills;
         this.authService = authService;
         this.auditStore = auditStore;
+        this.approvalStore = approvalStore;
     }
 
     @Override
@@ -210,6 +213,13 @@ public class WsHandler extends TextWebSocketHandler {
             case "device.rename" -> deviceRename(session, id, params);
             case "audit.activity.list" -> auditActivityList(session, id, params);
             case "audit.run.inspect" -> auditRunInspect(session, id, params);
+            case "approval.request" -> approvalRequest(session, id, params);
+            case "approval.get" -> approvalGet(session, id, params);
+            case "approval.list" -> approvalList(session, id, params);
+            case "approval.resolve" -> approvalResolve(session, id, params);
+            case "approval.history" -> approvalHistory(session, id, params);
+            case "exec.approvals.get" -> execApprovalsGet(session, id, params);
+            case "exec.approvals.set" -> execApprovalsSet(session, id, params);
             default -> {
                 ObjectNode err = OM.createObjectNode();
                 err.put("code", "METHOD_NOT_FOUND");
@@ -1154,6 +1164,107 @@ public class WsHandler extends TextWebSocketHandler {
             String actor = null;
             auditStore.record(actor, kind, sessionKey, "main", result, meta);
         }
+    }
+
+    // ==================== M5 审批中心 ====================
+
+    private void approvalRequest(WebSocketSession session, String id, JsonNode params) {
+        String kind = params.path("kind").asText("exec");
+        String sessionKey = params.path("sessionKey").asText(null);
+        String requester = params.path("requester").asText("anonymous");
+        String payload = params.path("payload").asText("{}");
+        var approval = approvalStore.create(kind, sessionKey, "main", requester, payload);
+        audit("approval.request", sessionKey, "created",
+                OM.createObjectNode().put("approvalId", approval.id()).toString());
+        ObjectNode payload2 = OM.createObjectNode()
+                .put("approvalId", approval.id())
+                .put("status", approval.status());
+        sendRes(session, id, true, payload2);
+    }
+
+    private void approvalGet(WebSocketSession session, String id, JsonNode params) {
+        String approvalId = params.path("id").asText();
+        if (approvalId.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "id 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        var approval = approvalStore.get(approvalId);
+        if (approval.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "NOT_FOUND").put("message", "审批不存在");
+            sendRes(session, id, false, err);
+            return;
+        }
+        sendRes(session, id, true, OM.valueToTree(approval.get()));
+    }
+
+    private void approvalList(WebSocketSession session, String id, JsonNode params) {
+        String kindFilter = params.path("kind").asText(null);
+        String statusFilter = params.path("status").asText(null);
+        var approvals = approvalStore.list(kindFilter, statusFilter);
+        ArrayNode arr = OM.valueToTree(approvals);
+        sendRes(session, id, true, OM.createObjectNode().set("approvals", arr));
+    }
+
+    private void approvalResolve(WebSocketSession session, String id, JsonNode params) {
+        String approvalId = params.path("id").asText();
+        String decision = params.path("decision").asText("approve");
+        String reason = params.path("reason").asText(null);
+        if (approvalId.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "id 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        boolean approved = "approve".equals(decision);
+        var result = approvalStore.resolve(approvalId, getActor(session), approved, reason);
+        if (result.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "NOT_FOUND").put("message", "审批不存在或已处理");
+            sendRes(session, id, false, err);
+            return;
+        }
+        audit("approval.resolve", null, approved ? "approved" : "rejected",
+                OM.createObjectNode().put("approvalId", approvalId).toString());
+        ObjectNode payload = OM.createObjectNode()
+                .put("approvalId", approvalId)
+                .put("status", approved ? "approved" : "rejected");
+        sendRes(session, id, true, payload);
+    }
+
+    private void approvalHistory(WebSocketSession session, String id, JsonNode params) {
+        String kindFilter = params.path("kind").asText(null);
+        Long beforeTs = params.path("beforeTs").asLong(0);
+        if (beforeTs == 0) beforeTs = null;
+        int limit = params.path("limit").asInt(50);
+        var history = approvalStore.history(kindFilter, beforeTs, limit);
+        ArrayNode arr = OM.valueToTree(history);
+        sendRes(session, id, true, OM.createObjectNode().set("history", arr));
+    }
+
+    private void execApprovalsGet(WebSocketSession session, String id, JsonNode params) {
+        String scope = params.path("scope").asText("gateway");
+        String policy = approvalStore.getPolicy(scope);
+        ObjectNode payload = OM.createObjectNode()
+                .put("scope", scope);
+        if (policy != null) payload.put("policy", policy);
+        sendRes(session, id, true, payload);
+    }
+
+    private void execApprovalsSet(WebSocketSession session, String id, JsonNode params) {
+        String scope = params.path("scope").asText("gateway");
+        String policy = params.path("policy").asText("{}");
+        approvalStore.setPolicy(scope, policy, getActor(session));
+        audit("config.write", null, "exec_policy_set",
+                OM.createObjectNode().put("scope", scope).toString());
+        sendRes(session, id, true, OM.createObjectNode().put("scope", scope).put("updated", true));
+    }
+
+    private String getActor(WebSocketSession session) {
+        var auth = authBySession.get(session.getId());
+        return auth == null ? null : auth.username();
     }
 
     private void sendRes(WebSocketSession session, String id, boolean ok, JsonNode payload) {
