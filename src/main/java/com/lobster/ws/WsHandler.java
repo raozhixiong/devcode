@@ -34,17 +34,20 @@ public class WsHandler extends TextWebSocketHandler {
     private final AgentLoop loop;
     private final com.lobster.permission.PermissionEngine permissions;
     private final com.lobster.store.InboxStore inbox;
+    private final com.lobster.rbac.AgentRegistry agents;
     private final Map<WebSocketSession, Runnable> unsubscribes = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
 
     public WsHandler(MessageStore store, EventBus bus, AgentLoop loop,
                      com.lobster.permission.PermissionEngine permissions,
-                     com.lobster.store.InboxStore inbox) {
+                     com.lobster.store.InboxStore inbox,
+                     com.lobster.rbac.AgentRegistry agents) {
         this.store = store;
         this.bus = bus;
         this.loop = loop;
         this.permissions = permissions;
         this.inbox = inbox;
+        this.agents = agents;
     }
 
     @Override
@@ -93,12 +96,62 @@ public class WsHandler extends TextWebSocketHandler {
             case "sessions.list" -> sessionsList(session, id);
             case "permission.respond" -> permissionRespond(session, id, params);
             case "mode.set" -> modeSet(session, id, params);
+            case "agents.list" -> agentsList(session, id);
+            case "agents.create" -> agentsCreate(session, id, params);
             default -> {
                 ObjectNode err = OM.createObjectNode();
                 err.put("code", "METHOD_NOT_FOUND");
                 err.put("message", "未知方法: " + method);
                 sendRes(session, id, false, err);
             }
+        }
+    }
+
+    /** agents.list：全部 agent（角色实例）。 */
+    private void agentsList(WebSocketSession session, String id) {
+        ArrayNode arr = OM.createArrayNode();
+        for (var a : agents.list()) {
+            ObjectNode n = OM.createObjectNode()
+                    .put("id", a.id())
+                    .put("name", a.name())
+                    .put("role", a.role())
+                    .put("emoji", a.emoji())
+                    .put("modelId", a.modelId())
+                    .put("workspaceDir", a.workspaceDir());
+            n.set("allowedTools", OM.valueToTree(
+                    com.lobster.rbac.Role.of(a.role()).allowedTools()));
+            arr.add(n);
+        }
+        sendRes(session, id, true, OM.createObjectNode().set("agents", arr));
+    }
+
+    /** agents.create：{name, role, emoji?, modelProvider?, modelId?}。 */
+    private void agentsCreate(WebSocketSession session, String id, JsonNode params) {
+        String name = params.path("name").asText();
+        String role = params.path("role").asText();
+        if (name.isEmpty() || role.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "INVALID_PARAMS");
+            err.put("message", "name 与 role 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        try {
+            var a = agents.create(name, role, params.path("emoji").asText(null),
+                    params.path("modelProvider").asText(null), params.path("modelId").asText(null));
+            ObjectNode payload = OM.createObjectNode()
+                    .put("id", a.id())
+                    .put("name", a.name())
+                    .put("role", a.role())
+                    .put("emoji", a.emoji());
+            payload.set("allowedTools", OM.valueToTree(
+                    com.lobster.rbac.Role.of(a.role()).allowedTools()));
+            sendRes(session, id, true, payload);
+        } catch (IllegalArgumentException e) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "INVALID_ROLE");
+            err.put("message", String.valueOf(e.getMessage()));
+            sendRes(session, id, false, err);
         }
     }
 

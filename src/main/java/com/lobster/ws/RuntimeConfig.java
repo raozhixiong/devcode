@@ -37,6 +37,11 @@ public class RuntimeConfig {
     }
 
     @Bean
+    public com.lobster.rbac.AgentRegistry agentRegistry(javax.sql.DataSource sharedDataSource, Path stateDir) {
+        return new com.lobster.rbac.AgentRegistry(new org.springframework.jdbc.core.JdbcTemplate(sharedDataSource), stateDir);
+    }
+
+    @Bean
     public MessageStore messageStore(AgentDb mainAgentDb) {
         return new MessageStore(mainAgentDb);
     }

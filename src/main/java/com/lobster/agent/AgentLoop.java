@@ -38,6 +38,8 @@ public class AgentLoop {
     private final com.lobster.store.InboxStore inbox;
     private final PlanMode planMode = new PlanMode();
     private com.lobster.store.WriterClaimStore claims;
+    /** 角色工具过滤器（null = 不过滤）。 */
+    private volatile java.util.function.Predicate<String> toolFilter;
     /** 当前 run 的 writer claim（run 内有效）。 */
     private final java.util.Map<String, com.lobster.store.WriterClaimStore.Claim> activeClaims =
             new java.util.concurrent.ConcurrentHashMap<>();
@@ -46,6 +48,15 @@ public class AgentLoop {
 
     public void setWriterClaimStore(com.lobster.store.WriterClaimStore claims) {
         this.claims = claims;
+    }
+
+    public void setToolFilter(java.util.function.Predicate<String> filter) {
+        this.toolFilter = filter;
+    }
+
+    private boolean toolAllowed(String toolId) {
+        java.util.function.Predicate<String> f = toolFilter;
+        return f == null || f.test(toolId);
     }
 
     public AgentLoop(MessageStore store, EventBus bus, ToolRegistry tools,
@@ -327,10 +338,10 @@ public class AgentLoop {
         }
 
         Tool tool = tools.get(call.name());
-        if (tool == null) {
+        if (tool == null || !toolAllowed(call.name())) {
             store.addPart(assistantMessageId, new Part.Tool(call.name(), call.callId(),
-                    new Part.ToolState.Error("未知工具: " + call.name())));
-            publishToolFailed(sessionId, call, "未知工具");
+                    new Part.ToolState.Error("未知工具或角色无权限: " + call.name())));
+            publishToolFailed(sessionId, call, "未知工具/角色无权限");
             return;
         }
 
@@ -419,6 +430,7 @@ public class AgentLoop {
     private List<LlmProvider.ToolSpec> toolSpecs() {
         List<LlmProvider.ToolSpec> specs = new ArrayList<>();
         for (Tool t : tools.all()) {
+            if (!toolAllowed(t.id())) continue; // 角色过滤
             specs.add(new LlmProvider.ToolSpec(t.id(), t.description(), t.parameters()));
         }
         return specs;
