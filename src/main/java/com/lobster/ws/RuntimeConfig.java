@@ -77,7 +77,13 @@ public class RuntimeConfig {
     }
 
     @Bean
-    public AgentLoop agentLoop(MessageStore store, EventBus bus, PermissionEngine permissions, LobsterConfig config) {
+    public com.lobster.store.InboxStore inboxStore(AgentDb mainAgentDb) {
+        return new com.lobster.store.InboxStore(mainAgentDb);
+    }
+
+    @Bean
+    public AgentLoop agentLoop(MessageStore store, EventBus bus, PermissionEngine permissions,
+                               LobsterConfig config, com.lobster.store.InboxStore inbox) {
         var tools = ToolRegistry.of(
                 new ReadTool(), new WriteTool(), new EditTool(),
                 new GlobTool(), new GrepTool(), new BashTool(),
@@ -94,7 +100,7 @@ public class RuntimeConfig {
                     new LlmEvent.Finish("stop", new LlmEvent.Usage(10, 20))));
             model = "mock-echo";
         }
-        return new AgentLoop(store, bus, tools, permissions, llm, "main", model);
+        return new AgentLoop(store, bus, tools, permissions, llm, "main", model, inbox);
     }
 
     /** 供 WsHandler 使用的回复便捷方法（静态，避免循环依赖）。 */

@@ -33,15 +33,18 @@ public class WsHandler extends TextWebSocketHandler {
     private final EventBus bus;
     private final AgentLoop loop;
     private final com.lobster.permission.PermissionEngine permissions;
+    private final com.lobster.store.InboxStore inbox;
     private final Map<WebSocketSession, Runnable> unsubscribes = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
 
     public WsHandler(MessageStore store, EventBus bus, AgentLoop loop,
-                     com.lobster.permission.PermissionEngine permissions) {
+                     com.lobster.permission.PermissionEngine permissions,
+                     com.lobster.store.InboxStore inbox) {
         this.store = store;
         this.bus = bus;
         this.loop = loop;
         this.permissions = permissions;
+        this.inbox = inbox;
     }
 
     @Override
@@ -104,11 +107,18 @@ public class WsHandler extends TextWebSocketHandler {
         var existing = store.findByKey(sessionKey);
         var s = existing.orElseGet(() ->
                 store.createSession(sessionKey, "main", System.getProperty("user.dir")));
-        store.appendUser(s.id(), List.of(new Part.Text(text, false, false)));
-        bus.publish(new LobsterEvent("session.next.prompt.admitted", s.id(),
-                OM.createObjectNode().put("text", text), true));
-        // 虚拟线程执行 loop，立即返回 ack
-        Thread.ofVirtual().name("agent-loop-" + s.id()).start(() -> loop.run(s.id()));
+        if (loop.isBusy(s.id())) {
+            // busy：入收件箱（下轮 admit），立即 ack
+            inbox.enqueue(s.id(), text);
+            bus.publish(new LobsterEvent("session.input.queued", s.id(),
+                    OM.createObjectNode().put("text", text), false));
+        } else {
+            store.appendUser(s.id(), List.of(new Part.Text(text, false, false)));
+            bus.publish(new LobsterEvent(com.lobster.event.Events.PROMPT_ADMITTED, s.id(),
+                    OM.createObjectNode().put("text", text), true));
+            // 虚拟线程执行 loop，立即返回 ack
+            Thread.ofVirtual().name("agent-loop-" + s.id()).start(() -> loop.run(s.id()));
+        }
         ObjectNode payload = OM.createObjectNode()
                 .put("runId", s.id())
                 .put("status", "started");

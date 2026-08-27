@@ -34,10 +34,18 @@ public class AgentLoop {
     private final String agentId;
     private final String model;
     private final PromptAssembler promptAssembler;
+    private final java.util.Set<String> busySessions = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final com.lobster.store.InboxStore inbox;
 
     public AgentLoop(MessageStore store, EventBus bus, ToolRegistry tools,
                      PermissionEngine permissions, LlmProvider llm,
                      String agentId, String model) {
+        this(store, bus, tools, permissions, llm, agentId, model, null);
+    }
+
+    public AgentLoop(MessageStore store, EventBus bus, ToolRegistry tools,
+                     PermissionEngine permissions, LlmProvider llm,
+                     String agentId, String model, com.lobster.store.InboxStore inbox) {
         this.store = store;
         this.bus = bus;
         this.tools = tools;
@@ -46,17 +54,42 @@ public class AgentLoop {
         this.agentId = agentId;
         this.model = model;
         this.promptAssembler = new PromptAssembler(agentId, model);
+        this.inbox = inbox;
+    }
+
+    public boolean isBusy(String sessionId) {
+        return busySessions.contains(sessionId);
     }
 
     public void run(String sessionId) {
+        if (!busySessions.add(sessionId)) {
+            return; // 已在运行，输入由 WsHandler 入队
+        }
         publishStatus(sessionId, "busy");
         try {
             runLoop(sessionId);
+            drainInbox(sessionId);
         } finally {
+            busySessions.remove(sessionId);
             bus.publish(new com.lobster.event.LobsterEvent(
                     Events.SESSION_IDLE, sessionId,
                     OM.createObjectNode(), false));
             publishStatus(sessionId, "idle");
+        }
+    }
+
+    /** 轮结束：收件箱有内容则合并为新 user 消息并再跑一轮。 */
+    private void drainInbox(String sessionId) {
+        if (inbox == null) return;
+        int guard = 0;
+        while (guard++ < 10) {
+            List<String> prompts = inbox.drain(sessionId);
+            if (prompts.isEmpty()) return;
+            String merged = String.join("\n\n", prompts);
+            store.appendUser(sessionId, List.of(new Part.Text(merged, false, false)));
+            bus.publish(new com.lobster.event.LobsterEvent(Events.PROMPT_ADMITTED, sessionId,
+                    OM.createObjectNode().put("text", merged), true));
+            runLoop(sessionId);
         }
     }
 

@@ -17,6 +17,12 @@ mvn package "-DskipTests" -q              # 打 jar（target/lobster-gateway-0.1
 java -jar target\lobster-gateway-0.1.0-SNAPSHOT.jar   # 启动，浏览器开 http://127.0.0.1:18790
 ```
 
+需求目录：D:\workspace\devcode\requirement
+
+### Reference Implementations
+- opencode: `D:\workspace\sourcecode\opencode-dev`
+- openclaw: `D:\workspace\sourcecode\openclaw-main`
+
 ## 架构要点
 
 ```
