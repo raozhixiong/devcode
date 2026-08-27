@@ -83,7 +83,8 @@ public class RuntimeConfig {
 
     @Bean
     public AgentLoop agentLoop(MessageStore store, EventBus bus, PermissionEngine permissions,
-                               LobsterConfig config, com.lobster.store.InboxStore inbox) {
+                               LobsterConfig config, com.lobster.store.InboxStore inbox,
+                               AgentDb mainAgentDb) {
         var tools = ToolRegistry.of(
                 new ReadTool(), new WriteTool(), new EditTool(),
                 new GlobTool(), new GrepTool(), new BashTool(),
@@ -101,6 +102,8 @@ public class RuntimeConfig {
             model = "mock-echo";
         }
         var loop = new AgentLoop(store, bus, tools, permissions, llm, "main", model, inbox);
+        // writer claim 围栏（崩溃恢复：重启清孤儿 claim）
+        loop.setWriterClaimStore(new com.lobster.store.WriterClaimStore(mainAgentDb));
         // task 子代理工具需引用 loop（子会话复用同一 loop 实例）
         tools.register(new com.lobster.tool.builtin.TaskTool(store, loop));
         tools.register(new com.lobster.tool.builtin.PlanExitTool(loop.planMode()));

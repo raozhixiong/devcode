@@ -37,8 +37,16 @@ public class AgentLoop {
     private final java.util.Set<String> busySessions = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final com.lobster.store.InboxStore inbox;
     private final PlanMode planMode = new PlanMode();
+    private com.lobster.store.WriterClaimStore claims;
+    /** 当前 run 的 writer claim（run 内有效）。 */
+    private final java.util.Map<String, com.lobster.store.WriterClaimStore.Claim> activeClaims =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     public PlanMode planMode() { return planMode; }
+
+    public void setWriterClaimStore(com.lobster.store.WriterClaimStore claims) {
+        this.claims = claims;
+    }
 
     public AgentLoop(MessageStore store, EventBus bus, ToolRegistry tools,
                      PermissionEngine permissions, LlmProvider llm,
@@ -71,17 +79,38 @@ public class AgentLoop {
         if (!busySessions.add(sessionId)) {
             return; // 已在运行，输入由 WsHandler 入队
         }
+        // writer claim 围栏：会话写入权（被其他 run 持有则拒绝）
+        com.lobster.store.WriterClaimStore.Claim claim = null;
+        if (claims != null) {
+            claim = claims.claim(sessionId, "run_" + sessionId);
+            if (claim == null) {
+                busySessions.remove(sessionId);
+                throw new IllegalStateException("会话 " + sessionId + " 写入权被其他 run 持有");
+            }
+            activeClaims.put(sessionId, claim);
+        }
         publishStatus(sessionId, "busy");
         try {
             runLoop(sessionId);
             drainInbox(sessionId);
         } finally {
+            if (claims != null && claim != null) {
+                claims.release(claim);
+                activeClaims.remove(sessionId);
+            }
             busySessions.remove(sessionId);
             bus.publish(new com.lobster.event.LobsterEvent(
                     Events.SESSION_IDLE, sessionId,
                     OM.createObjectNode(), false));
             publishStatus(sessionId, "idle");
         }
+    }
+
+    /** 写前校验 claim 仍归本 run（代际不匹配说明被抢占，应中止）。 */
+    private boolean checkClaim(String sessionId) {
+        if (claims == null) return true;
+        com.lobster.store.WriterClaimStore.Claim claim = activeClaims.get(sessionId);
+        return claims.validate(claim);
     }
 
     /** 轮结束：收件箱有内容则合并为新 user 消息并再跑一轮。 */
@@ -157,6 +186,12 @@ public class AgentLoop {
         int step = 0;
         java.util.Map<String, Integer> toolCallCounts = new java.util.HashMap<>();
         while (true) {
+            if (!checkClaim(sessionId)) {
+                var asst = store.appendAssistant(sessionId);
+                store.addPart(asst.id(), new Part.Text(
+                        "writer claim 已被抢占，回合中止。", true, false));
+                return;
+            }
             if (++step > MAX_STEPS) {
                 var asst = store.appendAssistant(sessionId);
                 store.addPart(asst.id(), new Part.Text(
