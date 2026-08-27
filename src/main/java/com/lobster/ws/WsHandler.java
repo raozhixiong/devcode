@@ -38,6 +38,7 @@ public class WsHandler extends TextWebSocketHandler {
     private final com.lobster.store.SessionOwnership ownership;
     private final com.lobster.store.SessionStateService stateService;
     private final com.lobster.store.TaskStore taskStore;
+    private final com.lobster.store.WorkboardStore workboard;
     private final Map<WebSocketSession, Runnable> unsubscribes = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
 
@@ -47,7 +48,8 @@ public class WsHandler extends TextWebSocketHandler {
                      com.lobster.rbac.AgentRegistry agents,
                      com.lobster.store.SessionOwnership ownership,
                      com.lobster.store.SessionStateService stateService,
-                     com.lobster.store.TaskStore taskStore) {
+                     com.lobster.store.TaskStore taskStore,
+                     com.lobster.store.WorkboardStore workboard) {
         this.store = store;
         this.bus = bus;
         this.loop = loop;
@@ -57,6 +59,7 @@ public class WsHandler extends TextWebSocketHandler {
         this.ownership = ownership;
         this.stateService = stateService;
         this.taskStore = taskStore;
+        this.workboard = workboard;
     }
 
     @Override
@@ -119,6 +122,12 @@ public class WsHandler extends TextWebSocketHandler {
             case "tasks.list" -> tasksList(session, id, params);
             case "tasks.get" -> tasksGet(session, id, params);
             case "tasks.cancel" -> tasksCancel(session, id, params);
+            case "workboard.cards.list" -> workboardList(session, id, params);
+            case "workboard.cards.create" -> workboardCreate(session, id, params);
+            case "workboard.cards.update" -> workboardUpdate(session, id, params);
+            case "workboard.cards.move" -> workboardMove(session, id, params);
+            case "workboard.cards.delete" -> workboardDelete(session, id, params);
+            case "workboard.cards.events" -> workboardEvents(session, id, params);
             default -> {
                 ObjectNode err = OM.createObjectNode();
                 err.put("code", "METHOD_NOT_FOUND");
@@ -288,6 +297,127 @@ public class WsHandler extends TextWebSocketHandler {
                 .put("createdAt", t.createdAt())
                 .put("startedAt", t.startedAt() != null ? t.startedAt() : 0)
                 .put("endedAt", t.endedAt() != null ? t.endedAt() : 0);
+    }
+
+    /** workboard.cards.list：{boardId?, status?}。 */
+    private void workboardList(WebSocketSession session, String id, JsonNode params) {
+        String boardId = params.path("boardId").asText("main");
+        String status = params.path("status").asText("");
+        var cards = status.isEmpty()
+                ? workboard.listCards(boardId)
+                : workboard.listByStatus(boardId,
+                        com.lobster.store.WorkboardStore.Status.valueOf(status.toUpperCase()));
+        ArrayNode arr = OM.createArrayNode();
+        for (var c : cards) arr.add(cardJson(c));
+        sendRes(session, id, true, OM.createObjectNode().set("cards", arr));
+    }
+
+    /** workboard.cards.create：{boardId?, title, description?, status?, priority?, ...}。 */
+    private void workboardCreate(WebSocketSession session, String id, JsonNode params) {
+        String title = params.path("title").asText();
+        if (title.isEmpty()) {
+            sendRes(session, id, false, OM.createObjectNode().put("code","BAD_REQUEST").put("message","title 必填"));
+            return;
+        }
+        var status = parseStatus(params.path("status").asText("triage"));
+        var priority = parsePriority(params.path("priority").asText("normal"));
+        var c = workboard.createCard(
+                params.path("boardId").asText("main"),
+                title,
+                params.path("description").asText(null),
+                status, priority,
+                params.path("assignedAgentId").asText(null),
+                params.path("assignedUserId").asText(null),
+                params.path("linkedTaskId").asText(null),
+                params.path("linkedRunId").asText(null),
+                params.path("linkedSessionKey").asText(null),
+                params.path("labels").asText(null),
+                params.path("metadata").asText(null));
+        sendRes(session, id, true, cardJson(c));
+    }
+
+    /** workboard.cards.update：{cardId, title?, description?, priority?, labels?, metadata?}。 */
+    private void workboardUpdate(WebSocketSession session, String id, JsonNode params) {
+        String cardId = params.path("cardId").asText();
+        var existing = workboard.getCard(cardId);
+        if (existing.isEmpty()) {
+            sendRes(session, id, false, OM.createObjectNode().put("code","NOT_FOUND"));
+            return;
+        }
+        var c = existing.get();
+        workboard.updateCard(cardId,
+                params.has("title") ? params.path("title").asText() : c.title(),
+                params.has("description") ? params.path("description").asText() : c.description(),
+                params.has("priority") ? parsePriority(params.path("priority").asText()) : com.lobster.store.WorkboardStore.Priority.valueOf(c.priority().toUpperCase()),
+                params.has("labels") ? params.path("labels").asText() : c.labels(),
+                params.has("metadata") ? params.path("metadata").asText() : c.metadata());
+        sendRes(session, id, true, cardJson(workboard.getCard(cardId).orElseThrow()));
+    }
+
+    /** workboard.cards.move：{cardId, status, position?}。 */
+    private void workboardMove(WebSocketSession session, String id, JsonNode params) {
+        String cardId = params.path("cardId").asText();
+        String statusStr = params.path("status").asText();
+        if (cardId.isEmpty() || statusStr.isEmpty()) {
+            sendRes(session, id, false, OM.createObjectNode().put("code","BAD_REQUEST"));
+            return;
+        }
+        try {
+            var status = com.lobster.store.WorkboardStore.Status.valueOf(statusStr.toUpperCase());
+            Double pos = params.has("position") ? params.path("position").asDouble() : null;
+            workboard.moveCard(cardId, status, pos);
+            sendRes(session, id, true, cardJson(workboard.getCard(cardId).orElseThrow()));
+        } catch (IllegalArgumentException e) {
+            sendRes(session, id, false, OM.createObjectNode().put("code","INVALID_STATUS"));
+        }
+    }
+
+    /** workboard.cards.delete：{cardId}。 */
+    private void workboardDelete(WebSocketSession session, String id, JsonNode params) {
+        String cardId = params.path("cardId").asText();
+        workboard.deleteCard(cardId);
+        sendRes(session, id, true, OM.createObjectNode().put("deleted", true));
+    }
+
+    /** workboard.cards.events：{cardId} -> 事件历史。 */
+    private void workboardEvents(WebSocketSession session, String id, JsonNode params) {
+        String cardId = params.path("cardId").asText();
+        ArrayNode arr = OM.createArrayNode();
+        for (var e : workboard.listEvents(cardId)) {
+            arr.add(OM.createObjectNode()
+                    .put("id", e.id())
+                    .put("kind", e.kind())
+                    .put("actor", e.actor())
+                    .put("payload", e.payload())
+                    .put("createdAt", e.createdAt()));
+        }
+        sendRes(session, id, true, OM.createObjectNode().set("events", arr));
+    }
+
+    private ObjectNode cardJson(com.lobster.store.WorkboardStore.Card c) {
+        return OM.createObjectNode()
+                .put("id", c.id())
+                .put("boardId", c.boardId())
+                .put("status", c.status())
+                .put("priority", c.priority())
+                .put("labels", c.labels())
+                .put("title", c.title())
+                .put("description", c.description())
+                .put("assignedAgentId", c.assignedAgentId())
+                .put("linkedTaskId", c.linkedTaskId())
+                .put("linkedSessionKey", c.linkedSessionKey())
+                .put("position", c.position())
+                .put("archived", c.archived())
+                .put("createdAt", c.createdAt())
+                .put("updatedAt", c.updatedAt());
+    }
+
+    private com.lobster.store.WorkboardStore.Status parseStatus(String s) {
+        return com.lobster.store.WorkboardStore.Status.valueOf(s.toUpperCase());
+    }
+
+    private com.lobster.store.WorkboardStore.Priority parsePriority(String s) {
+        return com.lobster.store.WorkboardStore.Priority.valueOf(s.toUpperCase());
     }
 
     /** agents.list：全部 agent（角色实例）。 */
