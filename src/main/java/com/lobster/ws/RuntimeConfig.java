@@ -107,6 +107,7 @@ public class RuntimeConfig {
         // task 子代理工具需引用 loop（子会话复用同一 loop 实例）
         tools.register(new com.lobster.tool.builtin.TaskTool(store, loop));
         tools.register(new com.lobster.tool.builtin.PlanExitTool(loop.planMode()));
+        tools.register(new com.lobster.tool.builtin.BackgroundSpawnTool(store, bus, loop));
         return loop;
     }
 

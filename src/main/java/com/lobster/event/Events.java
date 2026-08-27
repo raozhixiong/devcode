@@ -18,6 +18,9 @@ public final class Events {
     public static final String COMPACTION_STARTED = "session.next.compaction.started";
     public static final String COMPACTION_ENDED = "session.next.compaction.ended";
     public static final String MODE_SWITCHED = "session.mode.switched";
+    public static final String AGENT_ANNOUNCED = "agent.announced";
+    public static final String TASK_STARTED = "session.task.started";
+    public static final String TASK_ANNOUNCED = "session.task.announced";
 
     private Events() {}
 }

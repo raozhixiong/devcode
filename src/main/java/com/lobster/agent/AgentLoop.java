@@ -113,6 +113,15 @@ public class AgentLoop {
         return claims.validate(claim);
     }
 
+    /** 后台子代理 announce 入口：父会话 busy 时结果入收件箱（轮结束 admit）。 */
+    public void enqueueAnnouncement(String sessionId, String text) {
+        if (inbox != null) {
+            inbox.enqueue(sessionId, text);
+        } else {
+            store.appendUser(sessionId, List.of(new Part.Text(text, true, false)));
+        }
+    }
+
     /** 轮结束：收件箱有内容则合并为新 user 消息并再跑一轮。 */
     private void drainInbox(String sessionId) {
         if (inbox == null) return;
