@@ -1,22 +1,23 @@
 package com.lobster.tool;
 
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
-/** 简单工具注册表。 */
+/** 简单工具注册表（保持注册顺序）。 */
 public final class ToolRegistry {
 
-    private final Map<String, Tool> tools;
-
-    private ToolRegistry(Map<String, Tool> tools) {
-        this.tools = tools;
-    }
+    private final Map<String, Tool> tools = new LinkedHashMap<>();
 
     public static ToolRegistry of(Tool... tools) {
-        return new ToolRegistry(Arrays.stream(tools)
-                .collect(Collectors.toUnmodifiableMap(Tool::id, t -> t)));
+        ToolRegistry r = new ToolRegistry();
+        for (Tool t : tools) r.register(t);
+        return r;
+    }
+
+    public synchronized void register(Tool tool) {
+        tools.put(tool.id(), tool);
     }
 
     public Tool get(String id) {
@@ -24,6 +25,6 @@ public final class ToolRegistry {
     }
 
     public List<Tool> all() {
-        return List.copyOf(tools.values());
+        synchronized (tools) { return List.copyOf(tools.values()); }
     }
 }
