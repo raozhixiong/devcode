@@ -37,6 +37,7 @@ public class WsHandler extends TextWebSocketHandler {
     private final com.lobster.rbac.AgentRegistry agents;
     private final com.lobster.store.SessionOwnership ownership;
     private final com.lobster.store.SessionStateService stateService;
+    private final com.lobster.store.TaskStore taskStore;
     private final Map<WebSocketSession, Runnable> unsubscribes = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
 
@@ -45,7 +46,8 @@ public class WsHandler extends TextWebSocketHandler {
                      com.lobster.store.InboxStore inbox,
                      com.lobster.rbac.AgentRegistry agents,
                      com.lobster.store.SessionOwnership ownership,
-                     com.lobster.store.SessionStateService stateService) {
+                     com.lobster.store.SessionStateService stateService,
+                     com.lobster.store.TaskStore taskStore) {
         this.store = store;
         this.bus = bus;
         this.loop = loop;
@@ -54,6 +56,7 @@ public class WsHandler extends TextWebSocketHandler {
         this.agents = agents;
         this.ownership = ownership;
         this.stateService = stateService;
+        this.taskStore = taskStore;
     }
 
     @Override
@@ -113,6 +116,9 @@ public class WsHandler extends TextWebSocketHandler {
             case "sessions.participants" -> sessionParticipants(session, id, params);
             case "sessions.state" -> sessionState(session, id, params);
             case "sessions.changesSince" -> sessionChangesSince(session, id, params);
+            case "tasks.list" -> tasksList(session, id, params);
+            case "tasks.get" -> tasksGet(session, id, params);
+            case "tasks.cancel" -> tasksCancel(session, id, params);
             default -> {
                 ObjectNode err = OM.createObjectNode();
                 err.put("code", "METHOD_NOT_FOUND");
@@ -228,6 +234,60 @@ public class WsHandler extends TextWebSocketHandler {
                 .put("creator", ownership.creator(s.id()))
                 .put("owner", ownership.owner(s.id()))
                 .set("participants", arr));
+    }
+
+    /** tasks.list：{status?, ownerKey?}。 */
+    private void tasksList(WebSocketSession session, String id, JsonNode params) {
+        String status = params.path("status").asText("");
+        String ownerKey = params.path("ownerKey").asText("");
+        var tasks = (status.isEmpty() && ownerKey.isEmpty()) ? taskStore.list()
+                : !status.isEmpty() ? taskStore.listByStatus(
+                        com.lobster.store.TaskStore.Status.valueOf(status.toUpperCase()))
+                : taskStore.listByOwner(ownerKey);
+        ArrayNode arr = OM.createArrayNode();
+        for (var t : tasks) arr.add(taskJson(t));
+        sendRes(session, id, true, OM.createObjectNode().set("tasks", arr));
+    }
+
+    /** tasks.get：{taskId}。 */
+    private void tasksGet(WebSocketSession session, String id, JsonNode params) {
+        String taskId = params.path("taskId").asText();
+        var t = taskStore.get(taskId);
+        if (t.isEmpty()) {
+            sendRes(session, id, false, OM.createObjectNode().put("code","NOT_FOUND"));
+            return;
+        }
+        sendRes(session, id, true, taskJson(t.get()));
+    }
+
+    /** tasks.cancel：{taskId}。 */
+    private void tasksCancel(WebSocketSession session, String id, JsonNode params) {
+        String taskId = params.path("taskId").asText();
+        boolean ok = taskStore.cancel(taskId);
+        sendRes(session, id, ok, ok ? OM.createObjectNode().put("cancelled", true)
+                : OM.createObjectNode().put("code","NOT_CANCELABLE").put("message","任务已终结或不存在"));
+    }
+
+    private ObjectNode taskJson(com.lobster.store.TaskStore.TaskRecord t) {
+        return OM.createObjectNode()
+                .put("id", t.id())
+                .put("runtime", t.runtime())
+                .put("taskKind", t.taskKind())
+                .put("ownerKey", t.ownerKey())
+                .put("agentId", t.agentId())
+                .put("runId", t.runId())
+                .put("label", t.label())
+                .put("taskText", t.taskText())
+                .put("status", t.status())
+                .put("notifyPolicy", t.notifyPolicy())
+                .put("toolUseCount", t.toolUseCount())
+                .put("lastToolName", t.lastToolName())
+                .put("error", t.error())
+                .put("progressSummary", t.progressSummary())
+                .put("terminalSummary", t.terminalSummary())
+                .put("createdAt", t.createdAt())
+                .put("startedAt", t.startedAt() != null ? t.startedAt() : 0)
+                .put("endedAt", t.endedAt() != null ? t.endedAt() : 0);
     }
 
     /** agents.list：全部 agent（角色实例）。 */

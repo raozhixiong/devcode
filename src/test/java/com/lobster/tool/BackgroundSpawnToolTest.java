@@ -10,9 +10,13 @@ import com.lobster.permission.PermissionEngine;
 import com.lobster.permission.PermissionRule;
 import com.lobster.store.AgentDb;
 import com.lobster.store.MessageStore;
+import com.lobster.store.TaskStore;
 import com.lobster.tool.builtin.BackgroundSpawnTool;
+import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.sqlite.SQLiteDataSource;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -55,7 +59,16 @@ class BackgroundSpawnToolTest {
 
         var tools = ToolRegistry.of();
         var loop = new AgentLoop(store, bus, tools, permissions, llm, "main", "mock");
-        tools.register(new BackgroundSpawnTool(store, bus, loop));
+
+        // 共享库 + TaskStore
+        SQLiteDataSource sharedDs = new SQLiteDataSource();
+        sharedDs.setUrl("jdbc:sqlite:" + tmp.resolve("lobster.db"));
+        Flyway.configure().dataSource(sharedDs)
+                .locations("classpath:db/migration/shared")
+                .baselineOnMigrate(true).load().migrate();
+        TaskStore taskStore = new TaskStore(new JdbcTemplate(sharedDs), bus);
+
+        tools.register(new BackgroundSpawnTool(store, bus, loop, taskStore));
 
         var s = store.createSession("bg-parent", "main", tmp.toString());
         store.appendUser(s.id(), List.of(new Part.Text("后台查文档", false, false)));

@@ -52,6 +52,12 @@ public class RuntimeConfig {
     }
 
     @Bean
+    public com.lobster.store.TaskStore taskStore(javax.sql.DataSource sharedDataSource, EventBus bus) {
+        return new com.lobster.store.TaskStore(
+                new org.springframework.jdbc.core.JdbcTemplate(sharedDataSource), bus);
+    }
+
+    @Bean
     public MessageStore messageStore(AgentDb mainAgentDb) {
         return new MessageStore(mainAgentDb);
     }
@@ -99,7 +105,7 @@ public class RuntimeConfig {
     @Bean
     public AgentLoop agentLoop(MessageStore store, EventBus bus, PermissionEngine permissions,
                                LobsterConfig config, com.lobster.store.InboxStore inbox,
-                               AgentDb mainAgentDb) {
+                               AgentDb mainAgentDb, com.lobster.store.TaskStore taskStore) {
         var tools = ToolRegistry.of(
                 new ReadTool(), new WriteTool(), new EditTool(),
                 new GlobTool(), new GrepTool(), new BashTool(),
@@ -122,7 +128,7 @@ public class RuntimeConfig {
         // task 子代理工具需引用 loop（子会话复用同一 loop 实例）
         tools.register(new com.lobster.tool.builtin.TaskTool(store, loop));
         tools.register(new com.lobster.tool.builtin.PlanExitTool(loop.planMode()));
-        tools.register(new com.lobster.tool.builtin.BackgroundSpawnTool(store, bus, loop));
+        tools.register(new com.lobster.tool.builtin.BackgroundSpawnTool(store, bus, loop, taskStore));
         return loop;
     }
 
