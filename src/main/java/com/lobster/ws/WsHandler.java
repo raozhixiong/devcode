@@ -35,19 +35,22 @@ public class WsHandler extends TextWebSocketHandler {
     private final com.lobster.permission.PermissionEngine permissions;
     private final com.lobster.store.InboxStore inbox;
     private final com.lobster.rbac.AgentRegistry agents;
+    private final com.lobster.store.SessionOwnership ownership;
     private final Map<WebSocketSession, Runnable> unsubscribes = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
 
     public WsHandler(MessageStore store, EventBus bus, AgentLoop loop,
                      com.lobster.permission.PermissionEngine permissions,
                      com.lobster.store.InboxStore inbox,
-                     com.lobster.rbac.AgentRegistry agents) {
+                     com.lobster.rbac.AgentRegistry agents,
+                     com.lobster.store.SessionOwnership ownership) {
         this.store = store;
         this.bus = bus;
         this.loop = loop;
         this.permissions = permissions;
         this.inbox = inbox;
         this.agents = agents;
+        this.ownership = ownership;
     }
 
     @Override
@@ -103,6 +106,8 @@ public class WsHandler extends TextWebSocketHandler {
             case "sessions.rename" -> sessionRename(session, id, params);
             case "sessions.fork" -> sessionFork(session, id, params);
             case "sessions.rewind" -> sessionRewind(session, id, params);
+            case "sessions.assignOwner" -> sessionAssignOwner(session, id, params);
+            case "sessions.participants" -> sessionParticipants(session, id, params);
             default -> {
                 ObjectNode err = OM.createObjectNode();
                 err.put("code", "METHOD_NOT_FOUND");
@@ -170,6 +175,28 @@ public class WsHandler extends TextWebSocketHandler {
         if (s == null) { sendRes(session, id, false, OM.createObjectNode().put("code","NOT_FOUND")); return; }
         store.rewind(s.id(), params.path("upToMessageId").asText());
         sendRes(session, id, true, OM.createObjectNode().put("rewound", true));
+    }
+
+    /** sessions.assignOwner：{sessionKey, owner}。 */
+    private void sessionAssignOwner(WebSocketSession session, String id, JsonNode params) {
+        var s = store.findByKey(params.path("sessionKey").asText("main")).orElse(null);
+        if (s == null) { sendRes(session, id, false, OM.createObjectNode().put("code","NOT_FOUND")); return; }
+        ownership.assignOwner(s.id(), params.path("owner").asText());
+        sendRes(session, id, true, OM.createObjectNode().put("assigned", true));
+    }
+
+    /** sessions.participants：{sessionKey}。 */
+    private void sessionParticipants(WebSocketSession session, String id, JsonNode params) {
+        var s = store.findByKey(params.path("sessionKey").asText("main")).orElse(null);
+        if (s == null) { sendRes(session, id, false, OM.createObjectNode().put("code","NOT_FOUND")); return; }
+        ArrayNode arr = OM.createArrayNode();
+        for (var p : ownership.listParticipants(s.id())) {
+            arr.add(OM.createObjectNode().put("actorId", p.actorId()).put("lastAt", p.lastAt()));
+        }
+        sendRes(session, id, true, OM.createObjectNode()
+                .put("creator", ownership.creator(s.id()))
+                .put("owner", ownership.owner(s.id()))
+                .set("participants", arr));
     }
 
     /** agents.list：全部 agent（角色实例）。 */

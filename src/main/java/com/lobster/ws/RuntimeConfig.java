@@ -42,6 +42,11 @@ public class RuntimeConfig {
     }
 
     @Bean
+    public com.lobster.store.SessionOwnership sessionOwnership(AgentDb mainAgentDb) {
+        return new com.lobster.store.SessionOwnership(mainAgentDb);
+    }
+
+    @Bean
     public MessageStore messageStore(AgentDb mainAgentDb) {
         return new MessageStore(mainAgentDb);
     }
