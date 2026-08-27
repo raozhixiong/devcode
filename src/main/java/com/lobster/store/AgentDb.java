@@ -50,6 +50,10 @@ public final class AgentDb implements AutoCloseable {
 
     @Override
     public void close() {
-        // SQLiteDataSource 无需显式关闭； WAL 文件由驱动管理
+        // checkpoint + 释放 WAL（Windows 下否则 .db-wal/.db-shm 无法删除）
+        try (var conn = dataSource.getConnection();
+             var stmt = conn.createStatement()) {
+            stmt.execute("PRAGMA wal_checkpoint(TRUNCATE)");
+        } catch (SQLException ignored) {}
     }
 }

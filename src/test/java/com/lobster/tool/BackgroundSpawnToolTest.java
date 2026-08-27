@@ -31,7 +31,12 @@ class BackgroundSpawnToolTest {
 
     @Test
     void spawnRunsInBackgroundAndAnnounces() throws Exception {
-        AgentDb db = AgentDb.open(tmp.resolve("agents"), "bgspawn");
+        try (AgentDb db = AgentDb.open(tmp.resolve("agents"), "bgspawn")) {
+        doSpawnTest(db);
+        } // db.close() checkpoint WAL 释放后再清 @TempDir
+    }
+
+    private void doSpawnTest(AgentDb db) throws Exception {
         MessageStore store = new MessageStore(db);
         EventBus bus = new EventBus(db);
         var permissions = new PermissionEngine(List.of(
