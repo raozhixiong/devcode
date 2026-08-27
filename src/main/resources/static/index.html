@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lobster 龙虾工作台</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">🦞 Lobster <span class="sub">M1 内核演示</span></div>
+  <div class="status"><span id="conn" class="dot off"></span><span id="connText">未连接</span></div>
+</header>
+<main class="chat">
+  <div id="messages" class="messages"></div>
+  <div class="composer">
+    <input id="input" type="text" placeholder="输入消息，回车发送（如：运行 echo hello）" autocomplete="off">
+    <button id="send">发送</button>
+  </div>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
