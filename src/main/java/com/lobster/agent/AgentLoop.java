@@ -61,9 +61,11 @@ public class AgentLoop {
     }
 
     private static final int MAX_STEPS = 50;
+    private static final int DOOM_LOOP_THRESHOLD = 3;
 
     private void runLoop(String sessionId) {
         int step = 0;
+        java.util.Map<String, Integer> toolCallCounts = new java.util.HashMap<>();
         while (true) {
             if (++step > MAX_STEPS) {
                 var asst = store.appendAssistant(sessionId);
@@ -127,6 +129,18 @@ public class AgentLoop {
 
             // 执行工具（M1 顺序执行）
             for (LlmEvent.ToolCall call : toolCalls) {
+                // doom loop 检测：同工具+同参数连续重复
+                String key = call.name() + ":" + call.argumentsJson();
+                int count = toolCallCounts.merge(key, 1, Integer::sum);
+                if (count > DOOM_LOOP_THRESHOLD) {
+                    store.addPart(assistant.id(), new Part.Tool(call.name(), call.callId(),
+                            new Part.ToolState.Error("doom loop 检测：同参数重复调用 " + count + " 次，已熔断")));
+                    publishToolFailed(sessionId, call, "doom loop 熔断");
+                    var asst = store.appendAssistant(sessionId);
+                    store.addPart(asst.id(), new Part.Text(
+                            "doom loop 检测：" + call.name() + " 同参数重复调用 " + count + " 次，回合终止。", true, false));
+                    return;
+                }
                 executeTool(sessionId, assistant.id(), call);
             }
 
