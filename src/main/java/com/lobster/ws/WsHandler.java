@@ -52,6 +52,8 @@ public class WsHandler extends TextWebSocketHandler {
     private final com.lobster.store.AuditStore auditStore;
     private final com.lobster.store.ApprovalStore approvalStore;
     private final com.lobster.store.ChannelStore channelStore;
+    private final com.lobster.store.ConfigStore configStore;
+    private final com.lobster.store.PluginStore pluginStore;
     private final Map<WebSocketSession, Runnable> unsubscribes = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, AuthInfo> authBySession = new ConcurrentHashMap<>();
@@ -75,7 +77,9 @@ public class WsHandler extends TextWebSocketHandler {
                      AuthService authService,
                      com.lobster.store.AuditStore auditStore,
                      com.lobster.store.ApprovalStore approvalStore,
-                     com.lobster.store.ChannelStore channelStore) {
+                     com.lobster.store.ChannelStore channelStore,
+                     com.lobster.store.ConfigStore configStore,
+                     com.lobster.store.PluginStore pluginStore) {
         this.store = store;
         this.bus = bus;
         this.loop = loop;
@@ -95,6 +99,8 @@ public class WsHandler extends TextWebSocketHandler {
         this.auditStore = auditStore;
         this.approvalStore = approvalStore;
         this.channelStore = channelStore;
+        this.configStore = configStore;
+        this.pluginStore = pluginStore;
     }
 
     @Override
@@ -227,6 +233,14 @@ public class WsHandler extends TextWebSocketHandler {
             case "channels.bindings.create" -> channelsBindingsCreate(session, id, params);
             case "channels.bindings.remove" -> channelsBindingsRemove(session, id, params);
             case "channels.status" -> channelsStatus(session, id);
+            case "config.get" -> configGet(session, id, params);
+            case "config.set" -> configSet(session, id, params);
+            case "config.patch" -> configPatch(session, id, params);
+            case "config.list" -> configList(session, id);
+            case "plugins.list" -> pluginsList(session, id);
+            case "plugins.install" -> pluginsInstall(session, id, params);
+            case "plugins.setEnabled" -> pluginsSetEnabled(session, id, params);
+            case "plugins.uninstall" -> pluginsUninstall(session, id, params);
             default -> {
                 ObjectNode err = OM.createObjectNode();
                 err.put("code", "METHOD_NOT_FOUND");
@@ -1335,6 +1349,127 @@ public class WsHandler extends TextWebSocketHandler {
             status.add(entry);
         }
         sendRes(session, id, true, OM.createObjectNode().set("channels", status));
+    }
+
+    // ==================== M5 配置中心 + 插件 ====================
+
+    private void configGet(WebSocketSession session, String id, JsonNode params) {
+        String path = params.path("path").asText();
+        if (path.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "path 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        var entry = configStore.get(path);
+        if (entry.isEmpty()) {
+            sendRes(session, id, true, OM.createObjectNode().put("path", path).put("found", false));
+            return;
+        }
+        ObjectNode payload = OM.createObjectNode()
+                .put("path", path)
+                .put("found", true)
+                .put("value", entry.get().value())
+                .put("revisionHash", entry.get().revisionHash())
+                .put("reloadKind", configStore.reloadKind(path));
+        sendRes(session, id, true, payload);
+    }
+
+    private void configSet(WebSocketSession session, String id, JsonNode params) {
+        String path = params.path("path").asText();
+        String value = params.path("value").asText();
+        if (path.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "path 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        var entry = configStore.set(path, value, getActor(session));
+        audit("config.write", null, "set",
+                OM.createObjectNode().put("path", path).toString());
+        ObjectNode payload = OM.createObjectNode()
+                .put("path", entry.path())
+                .put("revisionHash", entry.revisionHash())
+                .put("reloadKind", configStore.reloadKind(path));
+        sendRes(session, id, true, payload);
+    }
+
+    private void configPatch(WebSocketSession session, String id, JsonNode params) {
+        String path = params.path("path").asText();
+        String patches = params.path("patches").toString();
+        if (path.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "path 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        var entry = configStore.patch(path, patches, getActor(session));
+        audit("config.write", null, "patch",
+                OM.createObjectNode().put("path", path).toString());
+        ObjectNode payload = OM.createObjectNode()
+                .put("path", entry.path())
+                .put("revisionHash", entry.revisionHash())
+                .put("reloadKind", configStore.reloadKind(path));
+        sendRes(session, id, true, payload);
+    }
+
+    private void configList(WebSocketSession session, String id) {
+        var entries = configStore.list();
+        ArrayNode arr = OM.valueToTree(entries);
+        sendRes(session, id, true, OM.createObjectNode().set("entries", arr));
+    }
+
+    private void pluginsList(WebSocketSession session, String id) {
+        var plugins = pluginStore.list();
+        ArrayNode arr = OM.valueToTree(plugins);
+        sendRes(session, id, true, OM.createObjectNode().set("plugins", arr));
+    }
+
+    private void pluginsInstall(WebSocketSession session, String id, JsonNode params) {
+        String name = params.path("name").asText();
+        String source = params.path("source").asText();
+        String version = params.path("version").asText(null);
+        if (name.isEmpty() || source.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "name 和 source 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        var plugin = pluginStore.install(name, source, version);
+        audit("plugin.install", null, "installed",
+                OM.createObjectNode().put("pluginId", plugin.id()).toString());
+        ObjectNode payload = OM.createObjectNode()
+                .put("pluginId", plugin.id())
+                .put("name", plugin.name())
+                .put("enabled", plugin.enabled());
+        sendRes(session, id, true, payload);
+    }
+
+    private void pluginsSetEnabled(WebSocketSession session, String id, JsonNode params) {
+        String pluginId = params.path("id").asText();
+        boolean enabled = params.path("enabled").asBoolean(true);
+        if (pluginId.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "id 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        pluginStore.setEnabled(pluginId, enabled);
+        sendRes(session, id, true, OM.createObjectNode()
+                .put("pluginId", pluginId)
+                .put("enabled", enabled));
+    }
+
+    private void pluginsUninstall(WebSocketSession session, String id, JsonNode params) {
+        String pluginId = params.path("id").asText();
+        if (pluginId.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "id 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        pluginStore.uninstall(pluginId);
+        sendRes(session, id, true, OM.createObjectNode().put("pluginId", pluginId));
     }
 
     private void sendRes(WebSocketSession session, String id, boolean ok, JsonNode payload) {

@@ -37,6 +37,8 @@ public final class Events {
     public static final String APPROVAL_REQUESTED = "approval.requested";
     public static final String APPROVAL_RESOLVED = "approval.resolved";
     public static final String CHANNEL_CHANGED = "channel.changed";
+    public static final String CONFIG_CHANGED = "config.changed";
+    public static final String PLUGINS_CHANGED = "plugins.changed";
 
     private Events() {}
 }

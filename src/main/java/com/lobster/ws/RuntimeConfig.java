@@ -142,6 +142,18 @@ public class RuntimeConfig {
     }
 
     @Bean
+    public com.lobster.store.ConfigStore configStore(javax.sql.DataSource sharedDataSource, EventBus bus) {
+        return new com.lobster.store.ConfigStore(
+                new org.springframework.jdbc.core.JdbcTemplate(sharedDataSource), bus);
+    }
+
+    @Bean
+    public com.lobster.store.PluginStore pluginStore(javax.sql.DataSource sharedDataSource, EventBus bus) {
+        return new com.lobster.store.PluginStore(
+                new org.springframework.jdbc.core.JdbcTemplate(sharedDataSource), bus);
+    }
+
+    @Bean
     public MessageStore messageStore(AgentDb mainAgentDb) {
         return new MessageStore(mainAgentDb);
     }
