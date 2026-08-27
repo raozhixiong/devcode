@@ -41,6 +41,7 @@ public class AgentLoop {
     /** interrupt 请求的中止标志（每 session）。 */
     private final java.util.Set<String> abortRequests = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private com.lobster.store.WriterClaimStore claims;
+    private com.lobster.store.MemoryStore memoryStore;
     /** 角色工具过滤器（null = 不过滤）。 */
     private volatile java.util.function.Predicate<String> toolFilter;
     /** 当前 run 的 writer claim（run 内有效）。 */
@@ -62,6 +63,10 @@ public class AgentLoop {
 
     public void setWriterClaimStore(com.lobster.store.WriterClaimStore claims) {
         this.claims = claims;
+    }
+
+    public void setMemoryStore(com.lobster.store.MemoryStore memoryStore) {
+        this.memoryStore = memoryStore;
     }
 
     public void setToolFilter(java.util.function.Predicate<String> filter) {
@@ -128,6 +133,28 @@ public class AgentLoop {
                     Events.SESSION_IDLE, sessionId,
                     OM.createObjectNode(), false));
             publishStatus(sessionId, "idle");
+            writeEpisodicMemory(sessionId);
+        }
+    }
+
+    /** 会话结束后写 episodic 记忆（最后一条 assistant 文本）。 */
+    private void writeEpisodicMemory(String sessionId) {
+        if (memoryStore == null) return;
+        try {
+            var session = store.findById(sessionId);
+            if (session.isEmpty()) return;
+            var msgs = store.loadActive(sessionId);
+            String summary = msgs.stream()
+                    .filter(m -> "assistant".equals(m.role()))
+                    .flatMap(m -> m.parts().stream())
+                    .filter(p -> p instanceof com.lobster.model.Part.Text)
+                    .map(p -> ((com.lobster.model.Part.Text) p).text())
+                    .reduce("", (a, b) -> b);
+            if (!summary.isEmpty()) {
+                memoryStore.writeEpisodic(session.get().sessionKey(), summary);
+            }
+        } catch (Exception e) {
+            // episodic 记忆写入失败不影响会话
         }
     }
 

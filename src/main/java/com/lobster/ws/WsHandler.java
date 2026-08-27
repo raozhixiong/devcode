@@ -40,6 +40,8 @@ public class WsHandler extends TextWebSocketHandler {
     private final com.lobster.store.TaskStore taskStore;
     private final com.lobster.store.WorkboardStore workboard;
     private final com.lobster.store.CronStore cron;
+    private final com.lobster.store.MemoryStore memory;
+    private final com.lobster.store.DreamingSweep dreaming;
     private final Map<WebSocketSession, Runnable> unsubscribes = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
 
@@ -51,7 +53,9 @@ public class WsHandler extends TextWebSocketHandler {
                      com.lobster.store.SessionStateService stateService,
                      com.lobster.store.TaskStore taskStore,
                      com.lobster.store.WorkboardStore workboard,
-                     com.lobster.store.CronStore cron) {
+                     com.lobster.store.CronStore cron,
+                     com.lobster.store.MemoryStore memory,
+                     com.lobster.store.DreamingSweep dreaming) {
         this.store = store;
         this.bus = bus;
         this.loop = loop;
@@ -63,6 +67,8 @@ public class WsHandler extends TextWebSocketHandler {
         this.taskStore = taskStore;
         this.workboard = workboard;
         this.cron = cron;
+        this.memory = memory;
+        this.dreaming = dreaming;
     }
 
     @Override
@@ -138,6 +144,10 @@ public class WsHandler extends TextWebSocketHandler {
             case "cron.remove" -> cronRemove(session, id, params);
             case "cron.run" -> cronRun(session, id, params);
             case "cron.runs" -> cronRuns(session, id, params);
+            case "memory.search" -> memorySearch(session, id, params);
+            case "memory.recent" -> memoryRecent(session, id, params);
+            case "memory.curated" -> memoryCurated(session, id);
+            case "dreaming.sweep" -> dreamingSweep(session, id);
             default -> {
                 ObjectNode err = OM.createObjectNode();
                 err.put("code", "METHOD_NOT_FOUND");
@@ -523,6 +533,57 @@ public class WsHandler extends TextWebSocketHandler {
                 .put("nextFireAt", j.nextFireAt() != null ? j.nextFireAt() : 0)
                 .put("createdAt", j.createdAt())
                 .put("updatedAt", j.updatedAt());
+    }
+
+    /** memory.search：{query, limit?}。 */
+    private void memorySearch(WebSocketSession session, String id, JsonNode params) {
+        String query = params.path("query").asText();
+        int limit = params.path("limit").asInt(10);
+        ArrayNode arr = OM.createArrayNode();
+        for (var c : memory.search(query, limit)) {
+            arr.add(OM.createObjectNode()
+                    .put("id", c.id())
+                    .put("content", c.content())
+                    .put("originClass", c.originClass())
+                    .put("createdAt", c.createdAt()));
+        }
+        sendRes(session, id, true, OM.createObjectNode().set("results", arr));
+    }
+
+    /** memory.recent：{days?, limit?} -> 近期 episodic 记忆。 */
+    private void memoryRecent(WebSocketSession session, String id, JsonNode params) {
+        int days = params.path("days").asInt(2);
+        int limit = params.path("limit").asInt(20);
+        ArrayNode arr = OM.createArrayNode();
+        for (var c : memory.recentEpisodic(days, limit)) {
+            arr.add(OM.createObjectNode()
+                    .put("id", c.id())
+                    .put("content", c.content())
+                    .put("originClass", c.originClass())
+                    .put("createdAt", c.createdAt()));
+        }
+        sendRes(session, id, true, OM.createObjectNode().set("results", arr));
+    }
+
+    /** memory.curated：curated 记忆列表。 */
+    private void memoryCurated(WebSocketSession session, String id) {
+        ArrayNode arr = OM.createArrayNode();
+        for (var c : memory.curated()) {
+            arr.add(OM.createObjectNode()
+                    .put("id", c.id())
+                    .put("content", c.content())
+                    .put("createdAt", c.createdAt()));
+        }
+        sendRes(session, id, true, OM.createObjectNode().set("results", arr));
+    }
+
+    /** dreaming.sweep：手动触发 Dreaming 整合。 */
+    private void dreamingSweep(WebSocketSession session, String id) {
+        var result = dreaming.sweep();
+        sendRes(session, id, true, OM.createObjectNode()
+                .put("reviewed", result.reviewed())
+                .put("promoted", result.promoted())
+                .put("report", result.report()));
     }
 
     /** agents.list：全部 agent（角色实例）。 */

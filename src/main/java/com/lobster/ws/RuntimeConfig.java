@@ -78,6 +78,17 @@ public class RuntimeConfig {
     }
 
     @Bean
+    public com.lobster.store.MemoryStore memoryStore(AgentDb mainAgentDb, Path stateDir) {
+        return new com.lobster.store.MemoryStore(mainAgentDb,
+                stateDir.resolve("agents").resolve("main").resolve("workspace"));
+    }
+
+    @Bean
+    public com.lobster.store.DreamingSweep dreamingSweep(com.lobster.store.MemoryStore memoryStore) {
+        return new com.lobster.store.DreamingSweep(memoryStore);
+    }
+
+    @Bean
     public MessageStore messageStore(AgentDb mainAgentDb) {
         return new MessageStore(mainAgentDb);
     }
@@ -125,7 +136,8 @@ public class RuntimeConfig {
     @Bean
     public AgentLoop agentLoop(MessageStore store, EventBus bus, PermissionEngine permissions,
                                LobsterConfig config, com.lobster.store.InboxStore inbox,
-                               AgentDb mainAgentDb, com.lobster.store.TaskStore taskStore) {
+                               AgentDb mainAgentDb, com.lobster.store.TaskStore taskStore,
+                               com.lobster.store.MemoryStore memoryStore) {
         var tools = ToolRegistry.of(
                 new ReadTool(), new WriteTool(), new EditTool(),
                 new GlobTool(), new GrepTool(), new BashTool(),
@@ -149,6 +161,8 @@ public class RuntimeConfig {
         tools.register(new com.lobster.tool.builtin.TaskTool(store, loop));
         tools.register(new com.lobster.tool.builtin.PlanExitTool(loop.planMode()));
         tools.register(new com.lobster.tool.builtin.BackgroundSpawnTool(store, bus, loop, taskStore));
+        tools.register(new com.lobster.tool.builtin.MemorySearchTool(memoryStore));
+        loop.setMemoryStore(memoryStore);
         return loop;
     }
 
