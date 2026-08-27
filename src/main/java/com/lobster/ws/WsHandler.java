@@ -39,6 +39,7 @@ public class WsHandler extends TextWebSocketHandler {
     private final com.lobster.store.SessionStateService stateService;
     private final com.lobster.store.TaskStore taskStore;
     private final com.lobster.store.WorkboardStore workboard;
+    private final com.lobster.store.CronStore cron;
     private final Map<WebSocketSession, Runnable> unsubscribes = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
 
@@ -49,7 +50,8 @@ public class WsHandler extends TextWebSocketHandler {
                      com.lobster.store.SessionOwnership ownership,
                      com.lobster.store.SessionStateService stateService,
                      com.lobster.store.TaskStore taskStore,
-                     com.lobster.store.WorkboardStore workboard) {
+                     com.lobster.store.WorkboardStore workboard,
+                     com.lobster.store.CronStore cron) {
         this.store = store;
         this.bus = bus;
         this.loop = loop;
@@ -60,6 +62,7 @@ public class WsHandler extends TextWebSocketHandler {
         this.stateService = stateService;
         this.taskStore = taskStore;
         this.workboard = workboard;
+        this.cron = cron;
     }
 
     @Override
@@ -128,6 +131,13 @@ public class WsHandler extends TextWebSocketHandler {
             case "workboard.cards.move" -> workboardMove(session, id, params);
             case "workboard.cards.delete" -> workboardDelete(session, id, params);
             case "workboard.cards.events" -> workboardEvents(session, id, params);
+            case "cron.list" -> cronList(session, id);
+            case "cron.get" -> cronGet(session, id, params);
+            case "cron.add" -> cronAdd(session, id, params);
+            case "cron.update" -> cronUpdate(session, id, params);
+            case "cron.remove" -> cronRemove(session, id, params);
+            case "cron.run" -> cronRun(session, id, params);
+            case "cron.runs" -> cronRuns(session, id, params);
             default -> {
                 ObjectNode err = OM.createObjectNode();
                 err.put("code", "METHOD_NOT_FOUND");
@@ -418,6 +428,101 @@ public class WsHandler extends TextWebSocketHandler {
 
     private com.lobster.store.WorkboardStore.Priority parsePriority(String s) {
         return com.lobster.store.WorkboardStore.Priority.valueOf(s.toUpperCase());
+    }
+
+    /** cron.list：全部 cron job。 */
+    private void cronList(WebSocketSession session, String id) {
+        ArrayNode arr = OM.createArrayNode();
+        for (var j : cron.list()) arr.add(cronJobJson(j));
+        sendRes(session, id, true, OM.createObjectNode().set("jobs", arr));
+    }
+
+    /** cron.get：{jobId}。 */
+    private void cronGet(WebSocketSession session, String id, JsonNode params) {
+        var job = cron.get(params.path("jobId").asText());
+        if (job.isEmpty()) {
+            sendRes(session, id, false, OM.createObjectNode().put("code","NOT_FOUND"));
+            return;
+        }
+        sendRes(session, id, true, cronJobJson(job.get()));
+    }
+
+    /** cron.add：{agentId, name, schedule, prompt, sessionPolicy?}。 */
+    private void cronAdd(WebSocketSession session, String id, JsonNode params) {
+        try {
+            var job = cron.create(
+                    params.path("agentId").asText("main"),
+                    params.path("name").asText(),
+                    params.path("schedule").asText(),
+                    params.path("prompt").asText(),
+                    params.path("sessionPolicy").asText(null));
+            sendRes(session, id, true, cronJobJson(job));
+        } catch (IllegalArgumentException e) {
+            sendRes(session, id, false, OM.createObjectNode().put("code","INVALID_SCHEDULE")
+                    .put("message", e.getMessage()));
+        }
+    }
+
+    /** cron.update：{jobId, name?, schedule?, prompt?, sessionPolicy?, enabled?}。 */
+    private void cronUpdate(WebSocketSession session, String id, JsonNode params) {
+        try {
+            var job = cron.update(
+                    params.path("jobId").asText(),
+                    params.has("name") ? params.path("name").asText() : null,
+                    params.has("schedule") ? params.path("schedule").asText() : null,
+                    params.has("prompt") ? params.path("prompt").asText() : null,
+                    params.has("sessionPolicy") ? params.path("sessionPolicy").asText() : null,
+                    params.has("enabled") ? params.path("enabled").asBoolean() : null);
+            sendRes(session, id, true, cronJobJson(job));
+        } catch (Exception e) {
+            sendRes(session, id, false, OM.createObjectNode().put("code","ERROR")
+                    .put("message", e.getMessage()));
+        }
+    }
+
+    /** cron.remove：{jobId}。 */
+    private void cronRemove(WebSocketSession session, String id, JsonNode params) {
+        cron.remove(params.path("jobId").asText());
+        sendRes(session, id, true, OM.createObjectNode().put("removed", true));
+    }
+
+    /** cron.run：{jobId} -> 手动触发。 */
+    private void cronRun(WebSocketSession session, String id, JsonNode params) {
+        var run = cron.runOnce(params.path("jobId").asText());
+        sendRes(session, id, true, OM.createObjectNode()
+                .put("runId", run.id())
+                .put("status", run.status()));
+    }
+
+    /** cron.runs：{jobId} -> 运行历史。 */
+    private void cronRuns(WebSocketSession session, String id, JsonNode params) {
+        ArrayNode arr = OM.createArrayNode();
+        for (var r : cron.listRuns(params.path("jobId").asText())) {
+            arr.add(OM.createObjectNode()
+                    .put("id", r.id())
+                    .put("jobId", r.jobId())
+                    .put("fireAt", r.fireAt())
+                    .put("startedAt", r.startedAt() != null ? r.startedAt() : 0)
+                    .put("endedAt", r.endedAt() != null ? r.endedAt() : 0)
+                    .put("status", r.status())
+                    .put("runId", r.runId())
+                    .put("error", r.error()));
+        }
+        sendRes(session, id, true, OM.createObjectNode().set("runs", arr));
+    }
+
+    private ObjectNode cronJobJson(com.lobster.store.CronStore.CronJob j) {
+        return OM.createObjectNode()
+                .put("id", j.id())
+                .put("agentId", j.agentId())
+                .put("name", j.name())
+                .put("schedule", j.schedule())
+                .put("prompt", j.prompt())
+                .put("sessionPolicy", j.sessionPolicy())
+                .put("enabled", j.enabled())
+                .put("nextFireAt", j.nextFireAt() != null ? j.nextFireAt() : 0)
+                .put("createdAt", j.createdAt())
+                .put("updatedAt", j.updatedAt());
     }
 
     /** agents.list：全部 agent（角色实例）。 */

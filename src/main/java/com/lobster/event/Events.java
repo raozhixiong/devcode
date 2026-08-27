@@ -25,6 +25,7 @@ public final class Events {
     public static final String SESSION_STATE_CHANGED = "session.state.changed";
     public static final String TASKS_CHANGED = "tasks.changed";
     public static final String WORKBOARD_CHANGED = "workboard.changed";
+    public static final String CRON_CHANGED = "cron.changed";
 
     private Events() {}
 }

@@ -64,6 +64,20 @@ public class RuntimeConfig {
     }
 
     @Bean
+    public com.lobster.store.CronStore cronStore(javax.sql.DataSource sharedDataSource, EventBus bus) {
+        return new com.lobster.store.CronStore(
+                new org.springframework.jdbc.core.JdbcTemplate(sharedDataSource), bus);
+    }
+
+    @Bean
+    public com.lobster.store.CronScheduler cronScheduler(com.lobster.store.CronStore cronStore,
+                                                          MessageStore messageStore,
+                                                          AgentLoop loop,
+                                                          EventBus bus) {
+        return new com.lobster.store.CronScheduler(cronStore, messageStore, loop, bus);
+    }
+
+    @Bean
     public MessageStore messageStore(AgentDb mainAgentDb) {
         return new MessageStore(mainAgentDb);
     }
