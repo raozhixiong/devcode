@@ -15,6 +15,8 @@ public final class Events {
     public static final String SESSION_IDLE = "session.idle";
     public static final String PERMISSION_ASKED = "permission.asked";
     public static final String PERMISSION_REPLIED = "permission.replied";
+    public static final String COMPACTION_STARTED = "session.next.compaction.started";
+    public static final String COMPACTION_ENDED = "session.next.compaction.ended";
 
     private Events() {}
 }

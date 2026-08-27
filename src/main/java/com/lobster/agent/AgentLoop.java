@@ -55,6 +55,9 @@ public class AgentLoop {
         this.model = model;
         this.promptAssembler = new PromptAssembler(agentId, model);
         this.inbox = inbox;
+        this.contextLimit = 128_000;
+        this.contextLimitHolder = 128_000;
+        this.summarizer = null;
     }
 
     public boolean isBusy(String sessionId) {
@@ -95,6 +98,57 @@ public class AgentLoop {
 
     private static final int MAX_STEPS = 50;
     private static final int DOOM_LOOP_THRESHOLD = 3;
+    /** 溢出阈值：估算 token 超过 contextLimit 的 70% 触发自动压缩。 */
+    private static final double COMPACTION_TRIGGER = 0.7;
+    /** 自动压缩保留的尾部消息条数（工具结果/最新问答）。 */
+    private static final int COMPACTION_KEEP_TAIL = 6;
+
+    private final long contextLimit;
+    private volatile long contextLimitHolder;
+    private volatile java.util.function.Function<String, String> summarizer;
+
+    public void setSummarizer(java.util.function.Function<String, String> summarizer) {
+        this.summarizer = summarizer;
+    }
+
+    /** 测试用：调整 contextLimit 触发阈值。 */
+    void setContextLimitForTest(long limit) {
+        this.contextLimitHolder = limit;
+    }
+
+    /**
+     * 自动压缩：保留尾部 COMPACTION_KEEP_TAIL 条，其余生成摘要（LLM summarizer 可用时调用，
+     * 否则规则摘要：逐条取首行）。返回压缩后的活动历史。
+     */
+    private List<com.lobster.model.Message> autoCompact(String sessionId,
+                                                        List<com.lobster.model.Message> history) {
+        if (history.size() <= COMPACTION_KEEP_TAIL) return history; // 太短不压
+        bus.publish(new com.lobster.event.LobsterEvent(Events.COMPACTION_STARTED, sessionId,
+                OM.createObjectNode().put("messages", history.size()), true));
+
+        List<com.lobster.model.Message> head = history.subList(0, history.size() - COMPACTION_KEEP_TAIL);
+        StringBuilder transcript = new StringBuilder();
+        for (var m : head) {
+            String text = m.parts().stream()
+                    .filter(p -> p instanceof Part.Text)
+                    .map(p -> ((Part.Text) p).text())
+                    .reduce("", (a, b) -> a + b);
+            if (!text.isEmpty()) transcript.append(m.role()).append(": ").append(text).append('\n');
+        }
+        String summary = summarizer != null
+                ? summarizer.apply(transcript.toString())
+                : "此前会话共 " + head.size() + " 条消息，摘要（规则版）：\n" + transcript;
+
+        String keepFromId = history.get(history.size() - COMPACTION_KEEP_TAIL).id();
+        store.compact(sessionId, keepFromId, summary);
+        List<com.lobster.model.Message> active = store.loadActive(sessionId);
+        bus.publish(new com.lobster.event.LobsterEvent(Events.COMPACTION_ENDED, sessionId,
+                OM.createObjectNode()
+                        .put("compactedMessages", head.size())
+                        .put("activeMessages", active.size())
+                        .put("summary", truncate(summary, 2000)), true));
+        return active;
+    }
 
     private void runLoop(String sessionId) {
         int step = 0;
@@ -107,6 +161,12 @@ public class AgentLoop {
                 return;
             }
             List<com.lobster.model.Message> history = store.loadActive(sessionId);
+
+            // 溢出检测：估算 token 超阈值 -> 自动压缩（保留尾部）
+            long limit = contextLimitHolder > 0 ? contextLimitHolder : contextLimit;
+            if (TokenEstimator.estimate(history) > limit * COMPACTION_TRIGGER) {
+                history = autoCompact(sessionId, history);
+            }
 
             // 终止检查：最后一条 assistant 无未完成工具则结束
             var last = history.isEmpty() ? null : history.get(history.size() - 1);

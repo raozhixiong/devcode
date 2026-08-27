@@ -97,6 +97,26 @@ public class MessageStore {
         throw new IllegalArgumentException("tool part 未找到: " + callId);
     }
 
+    /** 压缩：把 sessionId 中截至 keepFromId（不含）的历史标记为已压缩，并写入一条 compaction 摘要消息（新纪元起点）。 */
+    public Message compact(String sessionId, String keepFromId, String summary) {
+        long now = System.currentTimeMillis();
+        // Java 侧定位 cutoff（避免 SQLite 行元组比较差异），cutoff 之前的消息打 compacted 标记
+        List<String> all = jdbc.query(
+                "SELECT id FROM message WHERE session_id=? ORDER BY created_at, id",
+                (rs, i) -> rs.getString(1), sessionId);
+        boolean found = keepFromId == null;
+        for (String id : all) {
+            if (keepFromId != null && id.equals(keepFromId)) { found = true; break; }
+            jdbc.update("UPDATE message SET data=json_set(data, '$.compacted', json('true')), updated_at=? WHERE id=?",
+                    now, id);
+        }
+        if (!found) throw new IllegalArgumentException("keepFromId 不在会话中: " + keepFromId);        // compaction 摘要作为新 user 消息（纪元起点，loadActive 会从它开始）
+        var msg = append(sessionId, "user", List.of(new Part.Compaction(true, summary)));
+        jdbc.update("UPDATE session SET compaction_baseline=?, updated_at=? WHERE id=?",
+                msg.id(), now, sessionId);
+        return msg;
+    }
+
     public List<Message> loadActive(String sessionId) {
         List<Message> messages = jdbc.query(
                 "SELECT id FROM message WHERE session_id=? ORDER BY created_at, id",
@@ -104,7 +124,19 @@ public class MessageStore {
                 .map(mid -> new Message(mid, sessionId, null, null, 0))
                 .collect(Collectors.toList());
         return messages.stream().map(m -> loadMessage(m.id()))
+                .filter(m -> !isCompacted(m))
                 .collect(Collectors.toList());
+    }
+
+    /** 消息是否已被压缩（data.compacted 标记或含 Compaction part 之前的历史）。 */
+    private boolean isCompacted(Message m) {
+        try {
+            String data = jdbc.queryForObject(
+                    "SELECT data FROM message WHERE id=?", String.class, m.id());
+            return data != null && data.contains("\"compacted\":true");
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     public Optional<Message> lastMessage(String sessionId) {
