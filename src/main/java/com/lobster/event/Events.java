@@ -21,6 +21,7 @@ public final class Events {
     public static final String AGENT_ANNOUNCED = "agent.announced";
     public static final String TASK_STARTED = "session.task.started";
     public static final String TASK_ANNOUNCED = "session.task.announced";
+    public static final String QUEUE_MODE_SET = "session.queue.mode.set";
 
     private Events() {}
 }

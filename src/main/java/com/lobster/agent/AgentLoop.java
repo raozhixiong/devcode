@@ -37,6 +37,9 @@ public class AgentLoop {
     private final java.util.Set<String> busySessions = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final com.lobster.store.InboxStore inbox;
     private final PlanMode planMode = new PlanMode();
+    private final QueueMode queueMode = new QueueMode();
+    /** interrupt 请求的中止标志（每 session）。 */
+    private final java.util.Set<String> abortRequests = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private com.lobster.store.WriterClaimStore claims;
     /** 角色工具过滤器（null = 不过滤）。 */
     private volatile java.util.function.Predicate<String> toolFilter;
@@ -45,6 +48,17 @@ public class AgentLoop {
             new java.util.concurrent.ConcurrentHashMap<>();
 
     public PlanMode planMode() { return planMode; }
+
+    public QueueMode queueMode() { return queueMode; }
+
+    /** 请求中止某会话的活跃 run（interrupt 队列模式）。 */
+    public void requestAbort(String sessionId) {
+        abortRequests.add(sessionId);
+    }
+
+    private boolean consumeAbort(String sessionId) {
+        return abortRequests.remove(sessionId);
+    }
 
     public void setWriterClaimStore(com.lobster.store.WriterClaimStore claims) {
         this.claims = claims;
@@ -206,6 +220,12 @@ public class AgentLoop {
         int step = 0;
         java.util.Map<String, Integer> toolCallCounts = new java.util.HashMap<>();
         while (true) {
+            if (consumeAbort(sessionId)) {
+                var asst = store.appendAssistant(sessionId);
+                store.addPart(asst.id(), new Part.Text(
+                        "用户已中断（interrupt），回合终止。", true, false));
+                return;
+            }
             if (!checkClaim(sessionId)) {
                 var asst = store.appendAssistant(sessionId);
                 store.addPart(asst.id(), new Part.Text(

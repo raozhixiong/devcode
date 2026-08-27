@@ -98,12 +98,39 @@ public class WsHandler extends TextWebSocketHandler {
             case "mode.set" -> modeSet(session, id, params);
             case "agents.list" -> agentsList(session, id);
             case "agents.create" -> agentsCreate(session, id, params);
+            case "queue.mode.set" -> queueModeSet(session, id, params);
             default -> {
                 ObjectNode err = OM.createObjectNode();
                 err.put("code", "METHOD_NOT_FOUND");
                 err.put("message", "未知方法: " + method);
                 sendRes(session, id, false, err);
             }
+        }
+    }
+
+    /** queue.mode.set：{sessionKey, mode: steer|followup|collect|interrupt}。 */
+    private void queueModeSet(WebSocketSession session, String id, JsonNode params) {
+        String sessionKey = params.path("sessionKey").asText("main");
+        String mode = params.path("mode").asText("steer");
+        var s = store.findByKey(sessionKey).orElse(null);
+        if (s == null) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "SESSION_NOT_FOUND");
+            err.put("message", "会话不存在: " + sessionKey);
+            sendRes(session, id, false, err);
+            return;
+        }
+        try {
+            var m = com.lobster.agent.QueueMode.Mode.of(mode);
+            loop.queueMode().setMode(s.id(), m);
+            bus.publish(new LobsterEvent(com.lobster.event.Events.QUEUE_MODE_SET, s.id(),
+                    OM.createObjectNode().put("mode", m.name().toLowerCase()), true));
+            sendRes(session, id, true, OM.createObjectNode().put("mode", m.name().toLowerCase()));
+        } catch (Exception e) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "INVALID_MODE");
+            err.put("message", "未知队列模式: " + mode);
+            sendRes(session, id, false, err);
         }
     }
 
@@ -181,10 +208,14 @@ public class WsHandler extends TextWebSocketHandler {
         var s = existing.orElseGet(() ->
                 store.createSession(sessionKey, "main", System.getProperty("user.dir")));
         if (loop.isBusy(s.id())) {
-            // busy：入收件箱（下轮 admit），立即 ack
-            inbox.enqueue(s.id(), text);
+            // busy：按队列模式分流（steer/followup/collect/interrupt）
+            var disp = loop.queueMode().dispatch(s.id(), true,
+                    ignore -> inbox.enqueue(s.id(), text),
+                    () -> loop.requestAbort(s.id()));
             bus.publish(new LobsterEvent("session.input.queued", s.id(),
-                    OM.createObjectNode().put("text", text), false));
+                    OM.createObjectNode().put("text", text)
+                            .put("mode", disp.mode().name().toLowerCase())
+                            .put("note", disp.note()), false));
         } else {
             store.appendUser(s.id(), List.of(new Part.Text(text, false, false)));
             bus.publish(new LobsterEvent(com.lobster.event.Events.PROMPT_ADMITTED, s.id(),
