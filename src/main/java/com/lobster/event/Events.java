@@ -36,6 +36,7 @@ public final class Events {
     public static final String AUDIT_CHANGED = "audit.changed";
     public static final String APPROVAL_REQUESTED = "approval.requested";
     public static final String APPROVAL_RESOLVED = "approval.resolved";
+    public static final String CHANNEL_CHANGED = "channel.changed";
 
     private Events() {}
 }

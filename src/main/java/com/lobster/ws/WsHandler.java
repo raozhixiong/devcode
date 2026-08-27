@@ -51,6 +51,7 @@ public class WsHandler extends TextWebSocketHandler {
     private final AuthService authService;
     private final com.lobster.store.AuditStore auditStore;
     private final com.lobster.store.ApprovalStore approvalStore;
+    private final com.lobster.store.ChannelStore channelStore;
     private final Map<WebSocketSession, Runnable> unsubscribes = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, AuthInfo> authBySession = new ConcurrentHashMap<>();
@@ -73,7 +74,8 @@ public class WsHandler extends TextWebSocketHandler {
                      com.lobster.store.SkillsStore skills,
                      AuthService authService,
                      com.lobster.store.AuditStore auditStore,
-                     com.lobster.store.ApprovalStore approvalStore) {
+                     com.lobster.store.ApprovalStore approvalStore,
+                     com.lobster.store.ChannelStore channelStore) {
         this.store = store;
         this.bus = bus;
         this.loop = loop;
@@ -92,6 +94,7 @@ public class WsHandler extends TextWebSocketHandler {
         this.authService = authService;
         this.auditStore = auditStore;
         this.approvalStore = approvalStore;
+        this.channelStore = channelStore;
     }
 
     @Override
@@ -220,6 +223,10 @@ public class WsHandler extends TextWebSocketHandler {
             case "approval.history" -> approvalHistory(session, id, params);
             case "exec.approvals.get" -> execApprovalsGet(session, id, params);
             case "exec.approvals.set" -> execApprovalsSet(session, id, params);
+            case "channels.bindings.list" -> channelsBindingsList(session, id);
+            case "channels.bindings.create" -> channelsBindingsCreate(session, id, params);
+            case "channels.bindings.remove" -> channelsBindingsRemove(session, id, params);
+            case "channels.status" -> channelsStatus(session, id);
             default -> {
                 ObjectNode err = OM.createObjectNode();
                 err.put("code", "METHOD_NOT_FOUND");
@@ -1265,6 +1272,69 @@ public class WsHandler extends TextWebSocketHandler {
     private String getActor(WebSocketSession session) {
         var auth = authBySession.get(session.getId());
         return auth == null ? null : auth.username();
+    }
+
+    // ==================== M5 频道接入 ====================
+
+    private void channelsBindingsList(WebSocketSession session, String id) {
+        var bindings = channelStore.list();
+        ArrayNode arr = OM.valueToTree(bindings);
+        sendRes(session, id, true, OM.createObjectNode().set("bindings", arr));
+    }
+
+    private void channelsBindingsCreate(WebSocketSession session, String id, JsonNode params) {
+        String channel = params.path("channel").asText();
+        String accountId = params.path("accountId").asText();
+        String agentId = params.path("agentId").asText("main");
+        String config = params.path("config").asText(null);
+        if (channel.isEmpty() || accountId.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "channel 和 accountId 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        try {
+            var binding = channelStore.create(channel, accountId, agentId, config);
+            audit("channel.binding.create", null, "created",
+                    OM.createObjectNode().put("bindingId", binding.id())
+                            .put("channel", channel).toString());
+            ObjectNode payload = OM.createObjectNode()
+                    .put("bindingId", binding.id())
+                    .put("channel", channel)
+                    .put("accountId", accountId);
+            sendRes(session, id, true, payload);
+        } catch (Exception e) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "CONFLICT").put("message", "绑定已存在");
+            sendRes(session, id, false, err);
+        }
+    }
+
+    private void channelsBindingsRemove(WebSocketSession session, String id, JsonNode params) {
+        String bindingId = params.path("bindingId").asText();
+        if (bindingId.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "bindingId 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        channelStore.remove(bindingId);
+        sendRes(session, id, true, OM.createObjectNode().put("bindingId", bindingId));
+    }
+
+    private void channelsStatus(WebSocketSession session, String id) {
+        var bindings = channelStore.list();
+        ArrayNode status = OM.createArrayNode();
+        for (var b : bindings) {
+            ObjectNode entry = OM.createObjectNode()
+                    .put("bindingId", b.id())
+                    .put("channel", b.channel())
+                    .put("accountId", b.accountId())
+                    .put("agentId", b.agentId())
+                    .put("status", "active");
+            status.add(entry);
+        }
+        sendRes(session, id, true, OM.createObjectNode().set("channels", status));
     }
 
     private void sendRes(WebSocketSession session, String id, boolean ok, JsonNode payload) {
