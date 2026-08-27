@@ -7,6 +7,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.test.context.TestPropertySource;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -18,6 +20,18 @@ class EventControllerTest {
 
     @Autowired TestRestTemplate http;
     @Autowired com.lobster.event.EventBus bus;
+
+    @org.junit.jupiter.api.BeforeAll
+    static void cleanState() throws Exception {
+        // 清理上次运行的残留（session_input/event 表数据导致断言污染）
+        var dir = Path.of("target/test-state-sse");
+        if (Files.isDirectory(dir)) {
+            try (var walk = Files.walk(dir)) {
+                walk.sorted(java.util.Comparator.reverseOrder())
+                        .forEach(p -> { try { Files.delete(p); } catch (Exception ignored) {} });
+            }
+        }
+    }
 
     @Test
     void replayWithAfterFilter() {
