@@ -26,6 +26,7 @@ public final class Events {
     public static final String TASKS_CHANGED = "tasks.changed";
     public static final String WORKBOARD_CHANGED = "workboard.changed";
     public static final String CRON_CHANGED = "cron.changed";
+    public static final String SKILLS_CHANGED = "skills.changed";
 
     private Events() {}
 }

@@ -89,6 +89,16 @@ public class RuntimeConfig {
     }
 
     @Bean
+    public com.lobster.store.UsageStore usageStore(AgentDb mainAgentDb) {
+        return new com.lobster.store.UsageStore(mainAgentDb);
+    }
+
+    @Bean
+    public com.lobster.store.SkillsStore skillsStore(Path stateDir, EventBus bus) {
+        return new com.lobster.store.SkillsStore(stateDir, bus);
+    }
+
+    @Bean
     public MessageStore messageStore(AgentDb mainAgentDb) {
         return new MessageStore(mainAgentDb);
     }

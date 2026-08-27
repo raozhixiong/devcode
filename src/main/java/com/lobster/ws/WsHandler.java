@@ -42,6 +42,8 @@ public class WsHandler extends TextWebSocketHandler {
     private final com.lobster.store.CronStore cron;
     private final com.lobster.store.MemoryStore memory;
     private final com.lobster.store.DreamingSweep dreaming;
+    private final com.lobster.store.UsageStore usage;
+    private final com.lobster.store.SkillsStore skills;
     private final Map<WebSocketSession, Runnable> unsubscribes = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
 
@@ -55,7 +57,9 @@ public class WsHandler extends TextWebSocketHandler {
                      com.lobster.store.WorkboardStore workboard,
                      com.lobster.store.CronStore cron,
                      com.lobster.store.MemoryStore memory,
-                     com.lobster.store.DreamingSweep dreaming) {
+                     com.lobster.store.DreamingSweep dreaming,
+                     com.lobster.store.UsageStore usage,
+                     com.lobster.store.SkillsStore skills) {
         this.store = store;
         this.bus = bus;
         this.loop = loop;
@@ -69,6 +73,8 @@ public class WsHandler extends TextWebSocketHandler {
         this.cron = cron;
         this.memory = memory;
         this.dreaming = dreaming;
+        this.usage = usage;
+        this.skills = skills;
     }
 
     @Override
@@ -148,6 +154,14 @@ public class WsHandler extends TextWebSocketHandler {
             case "memory.recent" -> memoryRecent(session, id, params);
             case "memory.curated" -> memoryCurated(session, id);
             case "dreaming.sweep" -> dreamingSweep(session, id);
+            case "usage.byAgent" -> usageByAgent(session, id);
+            case "usage.session" -> usageSession(session, id, params);
+            case "usage.daily" -> usageDaily(session, id, params);
+            case "usage.sessions" -> usageSessions(session, id);
+            case "skills.list" -> skillsList(session, id);
+            case "skills.get" -> skillsGet(session, id, params);
+            case "skills.setEnabled" -> skillsSetEnabled(session, id, params);
+            case "skills.install" -> skillsInstall(session, id, params);
             default -> {
                 ObjectNode err = OM.createObjectNode();
                 err.put("code", "METHOD_NOT_FOUND");
@@ -584,6 +598,103 @@ public class WsHandler extends TextWebSocketHandler {
                 .put("reviewed", result.reviewed())
                 .put("promoted", result.promoted())
                 .put("report", result.report()));
+    }
+
+    /** usage.byAgent：按 agent 聚合。 */
+    private void usageByAgent(WebSocketSession session, String id) {
+        ArrayNode arr = OM.createArrayNode();
+        for (var u : usage.usageByAgent()) {
+            arr.add(OM.createObjectNode()
+                    .put("agentId", u.agentId())
+                    .put("totalInput", u.totalInput())
+                    .put("totalOutput", u.totalOutput())
+                    .put("totalCost", u.totalCost())
+                    .put("sessionCount", u.sessionCount()));
+        }
+        sendRes(session, id, true, OM.createObjectNode().set("agents", arr));
+    }
+
+    /** usage.session：{sessionKey}。 */
+    private void usageSession(WebSocketSession session, String id, JsonNode params) {
+        var s = store.findByKey(params.path("sessionKey").asText("main")).orElse(null);
+        if (s == null) { sendRes(session, id, false, OM.createObjectNode().put("code","NOT_FOUND")); return; }
+        var u = usage.sessionUsage(s.id());
+        if (u == null) { sendRes(session, id, false, OM.createObjectNode().put("code","NOT_FOUND")); return; }
+        sendRes(session, id, true, OM.createObjectNode()
+                .put("sessionId", u.sessionId())
+                .put("tokensInput", u.tokensInput())
+                .put("tokensOutput", u.tokensOutput())
+                .put("cost", u.cost()));
+    }
+
+    /** usage.daily：{days?}。 */
+    private void usageDaily(WebSocketSession session, String id, JsonNode params) {
+        int days = params.path("days").asInt(30);
+        ArrayNode arr = OM.createArrayNode();
+        for (var d : usage.dailyUsage(days)) {
+            arr.add(OM.createObjectNode()
+                    .put("date", d.date())
+                    .put("totalInput", d.totalInput())
+                    .put("totalOutput", d.totalOutput())
+                    .put("totalCost", d.totalCost())
+                    .put("sessionCount", d.sessionCount()));
+        }
+        sendRes(session, id, true, OM.createObjectNode().set("daily", arr));
+    }
+
+    /** usage.sessions：全部会话含 usage。 */
+    private void usageSessions(WebSocketSession session, String id) {
+        ArrayNode arr = OM.createArrayNode();
+        for (var s : usage.listSessions()) {
+            arr.add(OM.createObjectNode()
+                    .put("sessionId", s.sessionId())
+                    .put("sessionKey", s.sessionKey())
+                    .put("agentId", s.agentId())
+                    .put("tokensInput", s.tokensInput())
+                    .put("tokensOutput", s.tokensOutput())
+                    .put("cost", s.cost())
+                    .put("createdAt", s.createdAt())
+                    .put("updatedAt", s.updatedAt()));
+        }
+        sendRes(session, id, true, OM.createObjectNode().set("sessions", arr));
+    }
+
+    /** skills.list。 */
+    private void skillsList(WebSocketSession session, String id) {
+        ArrayNode arr = OM.createArrayNode();
+        for (var s : skills.list()) {
+            arr.add(OM.createObjectNode()
+                    .put("name", s.name())
+                    .put("description", s.description())
+                    .put("enabled", s.enabled()));
+        }
+        sendRes(session, id, true, OM.createObjectNode().set("skills", arr));
+    }
+
+    /** skills.get：{name}。 */
+    private void skillsGet(WebSocketSession session, String id, JsonNode params) {
+        var s = skills.get(params.path("name").asText());
+        if (s.isEmpty()) { sendRes(session, id, false, OM.createObjectNode().put("code","NOT_FOUND")); return; }
+        sendRes(session, id, true, OM.createObjectNode()
+                .put("name", s.get().name())
+                .put("description", s.get().description())
+                .put("content", s.get().content())
+                .put("enabled", s.get().enabled()));
+    }
+
+    /** skills.setEnabled：{name, enabled}。 */
+    private void skillsSetEnabled(WebSocketSession session, String id, JsonNode params) {
+        boolean ok = skills.setEnabled(params.path("name").asText(), params.path("enabled").asBoolean());
+        sendRes(session, id, ok, ok ? OM.createObjectNode().put("updated", true)
+                : OM.createObjectNode().put("code","NOT_FOUND"));
+    }
+
+    /** skills.install：{name, content}。 */
+    private void skillsInstall(WebSocketSession session, String id, JsonNode params) {
+        var s = skills.install(params.path("name").asText(), params.path("content").asText());
+        sendRes(session, id, true, OM.createObjectNode()
+                .put("name", s.name())
+                .put("installed", true));
     }
 
     /** agents.list：全部 agent（角色实例）。 */
