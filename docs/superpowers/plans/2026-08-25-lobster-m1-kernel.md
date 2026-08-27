@@ -1,6 +1,6 @@
 # 龙虾 M1 内核实施计划（Agent Loop + Part 模型 + 工具 + 权限 + 存储 + WS 事件流）
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 构建可运行的龙虾 Gateway 内核：会话/消息/Part 存储、Agent Loop、8 个内置工具、权限引擎、WebSocket 事件流，开发者可通过 WS 对话并执行工具。
 
@@ -30,7 +30,7 @@
 **Interfaces:**
 - Produces: 可启动 Spring Boot 应用；包根 `com.lobster`；后续任务全部放 `com.lobster.*`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```java
 package com.lobster;
@@ -47,12 +47,12 @@ class LobsterApplicationTest {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `mvn test -Dtest=LobsterApplicationTest`
 Expected: FAIL（找不到主类）
 
-- [ ] **Step 3: 写 pom.xml 与主类**
+- [x] **Step 3: 写 pom.xml 与主类**
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -114,12 +114,12 @@ lobster:
   state-dir: ${LOBSTER_STATE_DIR:}
 ```
 
-- [ ] **Step 4: 运行测试通过**
+- [x] **Step 4: 运行测试通过**
 
 Run: `mvn test -Dtest=LobsterApplicationTest`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pom.xml src/
@@ -139,7 +139,7 @@ git commit -m "feat: lobster gateway skeleton (spring boot 3 + java 21)"
 **Interfaces:**
 - Produces: `Ulid.next(String prefix)` -> `String`（如 `Ulid.next("ses_")`）；`StateDirs.resolve(String override)` -> `Path`（含 workspace/agents/tool-output/logs 子目录，自动创建）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```java
 package com.lobster.util;
@@ -173,12 +173,12 @@ class StateDirsTest {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `mvn test -Dtest='UlidTest,StateDirsTest'`
 Expected: FAIL
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 ```java
 package com.lobster.util;
@@ -252,12 +252,12 @@ public final class StateDirs {
 }
 ```
 
-- [ ] **Step 4: 运行测试通过**
+- [x] **Step 4: 运行测试通过**
 
 Run: `mvn test -Dtest='UlidTest,StateDirsTest'`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/main/java/com/lobster/util/ src/test/java/com/lobster/util/
@@ -277,7 +277,7 @@ git commit -m "feat: ulid generator and state dirs"
 - Produces: `DatabaseConfig.sharedDataSource()`（DataSource，指向 `<stateDir>/lobster.db`）；表 `user`、`agent`、`agent_binding`、`task`、`workboard_card`、`approval`、`cron_job`、`cron_run`、`secret_store_entry`、`audit_event`、`config_state`、`schema_meta`、`plugin`
 - 后续任务用 `@Autowired DataSource` 即得共享库
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```java
 package com.lobster.store;
@@ -311,12 +311,12 @@ class DatabaseConfigTest {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `mvn test -Dtest=DatabaseConfigTest`
 Expected: FAIL
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 ```java
 package com.lobster.store;
@@ -354,12 +354,12 @@ public class DatabaseConfig {
 
 V1__shared_init.sql：从《07-龙虾-表设计.md》第一章复制 user/auth_token/device/agent/agent_binding/channel_binding/task/workboard_card/workboard_event/approval/exec_approval_policy/cron_job/cron_run/secret_store_entry/audit_event/config_state/schema_meta/plugin 的完整 DDL（含索引，全部 `IF NOT EXISTS` 语义由 Flyway 保证只跑一次）。
 
-- [ ] **Step 4: 运行测试通过**
+- [x] **Step 4: 运行测试通过**
 
 Run: `mvn test -Dtest=DatabaseConfigTest`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/main/resources/db/ src/main/java/com/lobster/store/ src/test/
@@ -382,7 +382,7 @@ git commit -m "feat: shared sqlite schema via flyway"
 - Produces: `Part` sealed 接口 + record 族（TextPart/ReasoningPart/ToolPart+ToolState/StepFinishPart/FilePart/SnapshotPart/CompactionPart/SyntheticPart）；`Message{id, sessionId, role, parts, createdAt}`；`Session{id, sessionKey, kind, title, directory, ...}`
 - Produces: `AgentDb.open(Path agentDir, String agentId)` -> `AgentDb`（含 `ds()`、`jdbc()`）；自动跑 agent Flyway 迁移（session/message/part/session_input/session_active_writer/todo/event_sequence/event/…）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```java
 package com.lobster.store;
@@ -408,12 +408,12 @@ class AgentDbTest {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `mvn test -Dtest=AgentDbTest`
 Expected: FAIL
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 Part.java（sealed 接口 + record，Jackson 用 @JsonTypeInfo(typeIdProperty="type") 多态序列化）：
 
@@ -450,12 +450,12 @@ public sealed interface Part permits
 
 Message/Session 为简单 record + Jackson。AgentDb：open 时 `SQLiteDataSource` + 专属 Flyway（locations=`classpath:db/migration/agent`）。agent V1 SQL 从《07-龙虾-表设计.md》第二章 2.1/2.2 复制（session/session_participant/message/part/session_input/session_active_writer/todo/branch/event_sequence/event/session_state_signal）。
 
-- [ ] **Step 4: 运行测试通过**
+- [x] **Step 4: 运行测试通过**
 
 Run: `mvn test -Dtest=AgentDbTest`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/main/java/com/lobster/model/ src/main/resources/db/migration/agent/ src/main/java/com/lobster/store/AgentDb.java src/test/
@@ -481,7 +481,7 @@ git commit -m "feat: domain model and per-agent sqlite store"
   - `List<Message> loadActive(String sessionId)`（过滤 compaction 基线之前）
   - `Optional<Message> lastMessage(String sessionId)`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```java
 package com.lobster.store;
@@ -514,21 +514,21 @@ class MessageStoreTest {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `mvn test -Dtest=MessageStoreTest`
 Expected: FAIL
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 MessageStore 用 JdbcTemplate；part 存 JSON 列（Jackson ObjectMapper 静态实例）；updateToolState 读出整条消息 -> 替换目标 callId 的 ToolPart state -> 整体重写该 part 行（M1 简化，M2 优化为单 part 行）。
 
-- [ ] **Step 4: 运行测试通过**
+- [x] **Step 4: 运行测试通过**
 
 Run: `mvn test -Dtest=MessageStoreTest`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/main/java/com/lobster/store/MessageStore.java src/test/java/com/lobster/store/MessageStoreTest.java
@@ -553,7 +553,7 @@ git commit -m "feat: message store with part model"
   - `List<LobsterEvent> replay(String aggregateId, long afterSeq)`
 - 事件类型常量类 `Events`（session.next.prompt.admitted / step.started|ended / text.delta|ended / tool.called|success|failed / session.status）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```java
 package com.lobster.event;
@@ -586,21 +586,21 @@ class EventBusTest {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `mvn test -Dtest=EventBusTest`
 Expected: FAIL
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 EventBus：`ConcurrentHashMap<String, CopyOnWriteArrayList<Consumer>>` 路由 + `CopyOnWriteArrayList` 全局表；durable 写 event 表（`INSERT INTO event_sequence ... ON CONFLICT DO UPDATE SET seq=seq+1 RETURNING` 或先 SELECT 后 UPDATE 加锁——用 synchronized per-aggregate 简化）。
 
-- [ ] **Step 4: 运行测试通过**
+- [x] **Step 4: 运行测试通过**
 
 Run: `mvn test -Dtest=EventBusTest`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/main/java/com/lobster/event/
@@ -626,7 +626,7 @@ git commit -m "feat: event bus with durable replay"
 - Consumes: Part 模型（Task 4）
 - 工具语义对齐 OpenCode：Read 返回 `行号: 内容`（截断 2000 行/50KB）；Grep 正则+include 过滤；Edit 精确替换（replaceAll 选项）；Bash 超时 120s 默认
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```java
 package com.lobster.tool;
@@ -678,21 +678,21 @@ class ToolTest {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `mvn test -Dtest=ToolTest`
 Expected: FAIL
 
-- [ ] **Step 3: 实现全部工具**
+- [x] **Step 3: 实现全部工具**
 
 `ToolContext.dummy()` 提供测试用空实现。各工具 JSON Schema 用 Map 描述（type/properties/required）。BashTool：Windows 下 `cmd /c`，其他 `sh -c`；捕获 stdout+stderr；超时 120s 进程 destroy。
 
-- [ ] **Step 4: 运行测试通过**
+- [x] **Step 4: 运行测试通过**
 
 Run: `mvn test -Dtest=ToolTest`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/main/java/com/lobster/tool/
@@ -715,7 +715,7 @@ git commit -m "feat: tool spi and 8 builtin tools"
   - `void reply(String requestId, PermissionReply)`；`List<PendingPermission> pending()`
 - Consumes: EventBus（Task 6，publish permission.asked/replied）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```java
 package com.lobster.permission;
@@ -752,21 +752,21 @@ class PermissionEngineTest {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `mvn test -Dtest=PermissionEngineTest`
 Expected: FAIL
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 PermissionEngine 持规则列表 + `Map<String, CompletableFuture<PermissionReply>> pending`；ask 时 evaluate：DENY 直接抛/返回 deny；ALLOW 直接放行；ASK -> 建 future + 回调 notifier（M1 由测试注入，M2 接 EventBus+WS）。pattern 用 `*` 通配（`FileSystems.getDefault().getPathMatcher("glob:"+pattern)` 简化）。
 
-- [ ] **Step 4: 运行测试通过**
+- [x] **Step 4: 运行测试通过**
 
 Run: `mvn test -Dtest=PermissionEngineTest`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/main/java/com/lobster/permission/
@@ -791,7 +791,7 @@ git commit -m "feat: permission engine with findlast rules"
   - `record LlmRequest(String model, String systemPrompt, List<ChatMsg> messages, List<ToolSpec> tools, double temperature)`
 - Produces: `MockLlmProvider(List<LlmEvent> script)`（测试/无 key 演示用）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```java
 package com.lobster.llm;
@@ -816,21 +816,21 @@ class OpenAiCompatProviderTest {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `mvn test -Dtest=OpenAiCompatProviderTest`
 Expected: FAIL
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 OpenAiCompatProvider：Java 21 HttpClient POST `/chat/completions`（stream:true），逐行解析 SSE `data:` 行，Jackson 读 delta.content / tool_calls / finish_reason；构造器参数 `String baseUrl, String apiKey`。MockLlmProvider 直接 Stream.of(script)。LlmEvent/Usage 为 record。OpenAI 真实端点的集成测试标注 `@Disabled("需 API key")` 留接口。
 
-- [ ] **Step 4: 运行测试通过**
+- [x] **Step 4: 运行测试通过**
 
 Run: `mvn test -Dtest=OpenAiCompatProviderTest`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/main/java/com/lobster/llm/
@@ -853,7 +853,7 @@ git commit -m "feat: llm provider with openai-compat streaming and mock"
   - 工具结果以 user 消息回填：`{role:"user", parts:[ToolResultPart]}`（内部用 `Part.Tool` 的 Completed 状态表达，符合 OpenCode part 模型）
 - PromptAssembler（M1 简化）：身份段 + env 块（cwd/日期/platform）+ 工具清单
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```java
 package com.lobster.agent;
@@ -904,12 +904,12 @@ class AgentLoopTest {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `mvn test -Dtest=AgentLoopTest`
 Expected: FAIL
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 AgentLoop.run 核心循环（伪码见《05-龙虾-核心设计.md》2.1）：
 1. `while(true)`：loadActive；最后一条 assistant 且 finish=stop -> break
@@ -918,12 +918,12 @@ AgentLoop.run 核心循环（伪码见《05-龙虾-核心设计.md》2.1）：
 4. Finish -> StepFinishPart；reason=stop 且无工具调用 -> break；有工具调用 -> continue
 5. 全程 publish Events.SESSION_STATUS busy/idle
 
-- [ ] **Step 4: 运行测试通过**
+- [x] **Step 4: 运行测试通过**
 
 Run: `mvn test -Dtest=AgentLoopTest`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/main/java/com/lobster/agent/
@@ -947,7 +947,7 @@ git commit -m "feat: agent loop state machine"
   - method：`connect`（M1 免鉴权）| `chat.send {sessionKey,text}` | `chat.history {sessionKey}` | `sessions.list`
   - chat.send 后事件流转发：EventBus.subscribeAll -> 推 event 帧
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```java
 package com.lobster.ws;
@@ -1001,24 +1001,24 @@ class WsHandlerTest {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `mvn test -Dtest=WsHandlerTest`
 Expected: FAIL
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 WsConfig 注册 `WebSocketHandlerRegistry.addHandler(wsHandler, "/ws")`。WsHandler：`ConcurrentHashMap<WebSocketSession, Boolean>` 连接表；handleText 解析 method：
 - chat.send -> 找/建 main session -> appendUser -> 虚拟线程 `Thread.ofVirtual().start(() -> agentLoop.run(...))` -> 立即 res `{runId, status:"started"}`
 - chat.history -> loadActive -> res messages
 - EventBus.subscribeAll -> 广播 event 帧（带 seq，durable 事件取 event 表 seq；live 无）
 
-- [ ] **Step 4: 运行测试通过**
+- [x] **Step 4: 运行测试通过**
 
 Run: `mvn test -Dtest=WsHandlerTest`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/main/java/com/lobster/ws/
@@ -1039,7 +1039,7 @@ git commit -m "feat: websocket gateway with frame protocol"
 - Consumes: WS 端点（Task 11）
 - Produces: 打开 `http://127.0.0.1:18790/` 可用的极简聊天界面（消息流 + 工具卡片 + 输入框）
 
-- [ ] **Step 1: 写冒烟测试**
+- [x] **Step 1: 写冒烟测试**
 
 ```java
 package com.lobster;
@@ -1064,23 +1064,23 @@ class SmokeTest {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `mvn test -Dtest=SmokeTest`
 Expected: FAIL
 
-- [ ] **Step 3: 实现前端页**
+- [x] **Step 3: 实现前端页**
 
 原生 JS WebSocket 客户端（无构建）：connect -> 渲染消息流（user 右/assistant 左）；event 帧分发：text.delta 追加打字机、tool.called 渲染工具卡片（运行中 spinner）、tool.success 更新输出、session.idle 恢复输入框；输入框回车 -> chat.send。
 
-- [ ] **Step 4: 运行测试通过 + 手工验收**
+- [x] **Step 4: 运行测试通过 + 手工验收**
 
 Run: `mvn test`
 Expected: 全部 PASS
 
 手工验收：`mvn spring-boot:run`，浏览器打开 127.0.0.1:18790，发送 `运行 echo hello`（无 LLM key 时默认 Mock provider 直接文本回复），观察消息流与工具卡片。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/main/resources/static/ src/test/java/com/lobster/SmokeTest.java
