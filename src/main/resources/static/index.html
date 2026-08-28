@@ -1,88 +1,279 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Lobster 龙虾工作台</title>
-<link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lobster 龙虾工作台</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header class="topbar">
-  <div class="brand">🦞 Lobster <span class="sub">M6 扩展内核</span></div>
+  <div class="brand">🦞 Lobster <span class="sub">企业级 AI 工作台</span></div>
+  <nav class="views-nav" id="viewsNav">
+    <button class="vnav on" data-view="chat">对话</button>
+    <button class="vnav" data-view="board">看板</button>
+    <button class="vnav" data-view="tasks">任务</button>
+    <button class="vnav" data-view="cron">调度</button>
+    <button class="vnav" data-view="memory">记忆</button>
+    <button class="vnav" data-view="usage">用量</button>
+    <button class="vnav" data-view="channels">频道</button>
+    <button class="vnav" data-view="devices">设备</button>
+    <button class="vnav" data-view="admin">管理</button>
+  </nav>
   <div class="actions">
     <button id="paletteBtn" title="命令面板 (⌘K / Ctrl+K)">⌘K 命令</button>
     <div class="status"><span id="conn" class="dot off"></span><span id="connText">未连接</span></div>
+    <div id="meBox" class="me hidden"></div>
   </div>
 </header>
-<div class="layout">
-  <aside class="left">
-    <div class="pane-head">会话</div>
-    <div id="sessions" class="sessions"></div>
-    <button id="newSession" class="ghost">+ 新会话</button>
-  </aside>
-  <section class="chat">
-    <div id="messages" class="messages"></div>
-    <div class="composer">
-      <input id="input" type="text" placeholder="输入消息；/ 触发命令，@ 触发技能/参考，⌘K 命令面板" autocomplete="off">
-      <button id="planToggle" title="Plan 模式">Plan: 关</button>
-      <button id="send">发送</button>
-    </div>
+
+<main class="views">
+  <!-- 对话视图 -->
+  <section id="view-chat" class="view">
+    <aside class="left">
+      <div class="pane-head">
+        <span>会话</span>
+        <span class="head-actions">
+          <button class="ghost sm" id="newSession" title="新会话">＋</button>
+          <button class="ghost sm" id="renameSession" title="重命名">✎</button>
+          <button class="ghost sm" id="forkSession" title="分叉">⑂</button>
+          <button class="ghost sm" id="rewindSession" title="回滚">↺</button>
+          <button class="ghost sm" id="archiveSession" title="归档">🗀</button>
+        </span>
+      </div>
+      <div id="sessions" class="sessions"></div>
+      <div class="pane-head" style="margin-top:6px">智能体</div>
+      <div id="agents" class="agents"></div>
+      <div class="pane-head" style="margin-top:6px">队列模式</div>
+      <select id="queueMode" class="select">
+        <option value="steer">steer</option>
+        <option value="followup">followup</option>
+        <option value="collect">collect</option>
+        <option value="interrupt">interrupt</option>
+      </select>
+      <div id="planFlag" class="plan-flag">PLAN: 关</div>
+    </aside>
+    <section class="chat">
+      <div id="messages" class="messages"></div>
+      <div class="composer">
+        <input id="input" type="text" placeholder="输入消息；/ 触发命令，@ 触发技能/参考，⌘K 命令面板" autocomplete="off">
+        <button id="planToggle" title="Plan 模式">Plan: 关</button>
+        <button id="send">发送</button>
+      </div>
+    </section>
+    <aside class="right">
+      <div class="tabs" id="inspectorTabs">
+        <button class="tab on" data-tab="refs">参考</button>
+        <button class="tab" data-tab="ints">集成</button>
+        <button class="tab" data-tab="arts">产物</button>
+        <button class="tab" data-tab="hooks">钩子</button>
+        <button class="tab" data-tab="skills">技能</button>
+        <button class="tab" data-tab="plugins">插件</button>
+        <button class="tab" data-tab="market">市场</button>
+        <button class="tab" data-tab="approvals">审批</button>
+        <button class="tab" data-tab="audit">审计</button>
+        <button class="tab" data-tab="config">配置</button>
+      </div>
+      <div class="pane-body">
+        <div id="tab-refs" class="tabpane">
+          <button class="ghost sm" data-act="ref-add">+ 挂载参考库</button>
+          <div id="refList" class="list"></div>
+        </div>
+        <div id="tab-ints" class="tabpane hidden">
+          <button class="ghost sm" data-act="int-add">+ 连接集成</button>
+          <div id="intList" class="list"></div>
+        </div>
+        <div id="tab-arts" class="tabpane hidden">
+          <button class="ghost sm" data-act="art-add">+ 附加产物</button>
+          <div id="artList" class="list"></div>
+        </div>
+        <div id="tab-hooks" class="tabpane hidden">
+          <button class="ghost sm" data-act="hook-add">+ 安装钩子</button>
+          <div id="hookList" class="list"></div>
+        </div>
+        <div id="tab-skills" class="tabpane hidden">
+          <div id="skillList" class="list"></div>
+        </div>
+        <div id="tab-plugins" class="tabpane hidden">
+          <div id="pluginList" class="list"></div>
+        </div>
+        <div id="tab-market" class="tabpane hidden">
+          <button class="ghost sm" data-act="market-refresh">刷新市场</button>
+          <div id="marketList" class="list"></div>
+        </div>
+        <div id="tab-approvals" class="tabpane hidden">
+          <div class="subtabs">
+            <button class="stab on" data-astab="pending">待办</button>
+            <button class="stab" data-astab="history">历史</button>
+            <button class="stab" data-astab="exec">执行策略</button>
+          </div>
+          <button class="ghost sm" data-act="approval-refresh">刷新</button>
+          <div id="approvalList" class="list"></div>
+          <div id="approvalHistory" class="list hidden"></div>
+          <div id="approvalExec" class="hidden"></div>
+        </div>
+        <div id="tab-audit" class="tabpane hidden">
+          <button class="ghost sm" data-act="audit-refresh">刷新</button>
+          <div id="auditList" class="list"></div>
+        </div>
+        <div id="tab-config" class="tabpane hidden">
+          <div id="cfgList" class="list"></div>
+        </div>
+      </div>
+    </aside>
   </section>
-  <aside class="right">
-    <div class="tabs">
-      <button class="tab on" data-tab="refs">参考库</button>
-      <button class="tab" data-tab="ints">集成</button>
-      <button class="tab" data-tab="arts">产物</button>
-      <button class="tab" data-tab="hooks">钩子</button>
-      <button class="tab" data-tab="skills">技能</button>
-      <button class="tab" data-tab="market">市场</button>
-      <button class="tab" data-tab="approvals">审批</button>
-      <button class="tab" data-tab="audit">审计</button>
-      <button class="tab" data-tab="settings">设置</button>
+
+  <!-- 看板视图 -->
+  <section id="view-board" class="view hidden">
+    <div class="view-head">
+      <h3>工作看板</h3>
+      <div>
+        <button class="ghost sm" id="boardAdd">+ 新建卡片</button>
+        <button class="ghost sm" id="boardRefresh">刷新</button>
+      </div>
+    </div>
+    <div id="board" class="board"></div>
+  </section>
+
+  <!-- 任务视图 -->
+  <section id="view-tasks" class="view hidden">
+    <div class="view-head">
+      <h3>任务台账</h3>
+      <button class="ghost sm" id="tasksRefresh">刷新</button>
+    </div>
+    <div id="tasks" class="table-wrap"></div>
+    <div id="taskDetail" class="detail hidden"></div>
+  </section>
+
+  <!-- 调度视图 -->
+  <section id="view-cron" class="view hidden">
+    <div class="view-head">
+      <h3>Cron 调度</h3>
+      <button class="ghost sm" id="cronAdd">+ 新建任务</button>
+    </div>
+    <div id="cron" class="table-wrap"></div>
+    <div id="cronRuns" class="detail hidden"></div>
+  </section>
+
+  <!-- 记忆视图 -->
+  <section id="view-memory" class="view hidden">
+    <div class="view-head">
+      <h3>记忆中心</h3>
+      <button class="ghost sm" id="memorySweep">梦境巡检</button>
+    </div>
+    <div class="mem-tabs">
+      <button class="stab on" data-memtab="search">搜索</button>
+      <button class="stab" data-memtab="recent">近期</button>
+      <button class="stab" data-memtab="curated">精选</button>
+    </div>
+    <div id="memSearch" class="mem-pane">
+      <input id="memQuery" class="input" placeholder="搜索记忆内容…">
+      <button class="ghost sm" id="memSearchBtn">搜索</button>
+      <div id="memResults" class="list"></div>
+    </div>
+    <div id="memRecent" class="mem-pane hidden"><div id="memRecentList" class="list"></div></div>
+    <div id="memCurated" class="mem-pane hidden"><div id="memCuratedList" class="list"></div></div>
+  </section>
+
+  <!-- 用量视图 -->
+  <section id="view-usage" class="view hidden">
+    <div class="view-head">
+      <h3>用量统计</h3>
+      <button class="ghost sm" id="usageRefresh">刷新</button>
+    </div>
+    <div class="mem-tabs">
+      <button class="stab on" data-usagetab="agent">按智能体</button>
+      <button class="stab" data-usagetab="daily">按日</button>
+      <button class="stab" data-usagetab="session">按会话</button>
+    </div>
+    <div id="usageAgent" class="table-wrap"></div>
+    <div id="usageDaily" class="table-wrap hidden"></div>
+    <div id="usageSession" class="table-wrap hidden"></div>
+  </section>
+
+  <!-- 频道视图 -->
+  <section id="view-channels" class="view hidden">
+    <div class="view-head">
+      <h3>频道接入</h3>
+      <button class="ghost sm" id="channelAdd">+ 绑定频道</button>
+    </div>
+    <div id="channels" class="table-wrap"></div>
+  </section>
+
+  <!-- 设备视图 -->
+  <section id="view-devices" class="view hidden">
+    <div class="view-head">
+      <h3>设备与配对</h3>
+      <button class="ghost sm" id="deviceRefresh">刷新</button>
+    </div>
+    <h4>待配对</h4>
+    <div id="devicePending" class="table-wrap"></div>
+    <h4>已注册设备</h4>
+    <div id="deviceList" class="table-wrap"></div>
+  </section>
+
+  <!-- 管理视图 -->
+  <section id="view-admin" class="view hidden">
+    <div class="tabs" id="adminTabs">
+      <button class="tab on" data-atab="users">用户</button>
+      <button class="tab" data-atab="agents">智能体</button>
+      <button class="tab" data-atab="share">分享</button>
     </div>
     <div class="pane-body">
-      <div id="tab-refs" class="tabpane">
-        <button class="ghost sm" data-act="ref-add">+ 挂载参考库</button>
-        <div id="refList" class="list"></div>
+      <div id="atab-users" class="tabpane">
+        <button class="ghost sm" data-act="user-add">+ 新建用户</button>
+        <div id="userList" class="list"></div>
       </div>
-      <div id="tab-ints" class="tabpane hidden">
-        <button class="ghost sm" data-act="int-add">+ 连接集成</button>
-        <div id="intList" class="list"></div>
+      <div id="atab-agents" class="tabpane hidden">
+        <button class="ghost sm" data-act="agent-add">+ 新建智能体</button>
+        <div id="agentList" class="list"></div>
       </div>
-      <div id="tab-arts" class="tabpane hidden">
-        <div id="artList" class="list"></div>
-      </div>
-      <div id="tab-hooks" class="tabpane hidden">
-        <button class="ghost sm" data-act="hook-add">+ 安装钩子</button>
-        <div id="hookList" class="list"></div>
-      </div>
-      <div id="tab-skills" class="tabpane hidden">
-        <div id="skillList" class="list"></div>
-      </div>
-      <div id="tab-market" class="tabpane hidden">
-        <button class="ghost sm" data-act="market-refresh">刷新市场</button>
-        <div id="marketList" class="list"></div>
-      </div>
-      <div id="tab-approvals" class="tabpane hidden">
-        <button class="ghost sm" data-act="approval-refresh">刷新</button>
-        <div id="approvalList" class="list"></div>
-      </div>
-      <div id="tab-audit" class="tabpane hidden">
-        <button class="ghost sm" data-act="audit-refresh">刷新</button>
-        <div id="auditList" class="list"></div>
-      </div>
-      <div id="tab-settings" class="tabpane hidden">
-        <div id="cfgList" class="list"></div>
-        <div class="pane-head" style="margin-top:12px">插件</div>
-        <div id="pluginList" class="list"></div>
+      <div id="atab-share" class="tabpane hidden">
+        <button class="ghost sm" data-act="share-now">生成当前会话分享</button>
+        <div id="shareInfo" class="list"></div>
       </div>
     </div>
-  </aside>
+  </section>
+</main>
+
+<!-- 通用模态 -->
+<div id="modal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-title" id="modalTitle"></div>
+    <div id="modalBody"></div>
+    <div class="modal-foot" id="modalFoot"></div>
+  </div>
 </div>
+
+<!-- 权限弹窗（模态） -->
+<div id="permModal" class="modal hidden">
+  <div class="modal-box perm-box">
+    <div class="perm-title">🔐 权限请求: <b id="permName"></b></div>
+    <div class="perm-patterns" id="permPatterns"></div>
+    <div class="perm-btns">
+      <button id="permAlways">始终允许</button>
+      <button id="permOnce">仅此一次</button>
+      <button id="permReject" class="deny">拒绝</button>
+    </div>
+  </div>
+</div>
+
+<!-- 登录/引导模态 -->
+<div id="authModal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-title" id="authTitle">登录</div>
+    <div id="authBody"></div>
+    <div class="modal-foot" id="authFoot"></div>
+  </div>
+</div>
+
+<!-- 命令面板 -->
 <div id="palette" class="palette hidden">
   <input id="paletteInput" placeholder="搜索命令…">
   <div id="paletteItems" class="palette-items"></div>
 </div>
+
+<!-- 分享模态 -->
 <div id="shareModal" class="modal hidden">
   <div class="modal-box">
     <div class="modal-title">分享链接</div>
@@ -91,6 +282,9 @@
     <button id="shareClose">关闭</button>
   </div>
 </div>
+
+<div id="toast" class="toast hidden"></div>
+
 <script src="app.js"></script>
 </body>
 </html>
