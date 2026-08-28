@@ -8,17 +8,59 @@
 </head>
 <body>
 <header class="topbar">
-  <div class="brand">🦞 Lobster <span class="sub">M1 内核演示</span></div>
-  <div class="status"><span id="conn" class="dot off"></span><span id="connText">未连接</span></div>
-</header>
-<main class="chat">
-  <div id="messages" class="messages"></div>
-  <div class="composer">
-    <input id="input" type="text" placeholder="输入消息，回车发送（如：运行 echo hello）" autocomplete="off">
-    <button id="planToggle" title="Plan 模式：只读调研与规划（edit/bash 禁用，仅可写 plans/*.md）">Plan: 关</button>
-    <button id="send">发送</button>
+  <div class="brand">🦞 Lobster <span class="sub">M6 扩展内核</span></div>
+  <div class="actions">
+    <button id="paletteBtn" title="命令面板 (⌘K / Ctrl+K)">⌘K 命令</button>
+    <div class="status"><span id="conn" class="dot off"></span><span id="connText">未连接</span></div>
   </div>
-</main>
+</header>
+<div class="layout">
+  <aside class="left">
+    <div class="pane-head">会话</div>
+    <div id="sessions" class="sessions"></div>
+    <button id="newSession" class="ghost">+ 新会话</button>
+  </aside>
+  <section class="chat">
+    <div id="messages" class="messages"></div>
+    <div class="composer">
+      <input id="input" type="text" placeholder="输入消息；/ 触发命令，@ 触发技能/参考，⌘K 命令面板" autocomplete="off">
+      <button id="planToggle" title="Plan 模式">Plan: 关</button>
+      <button id="send">发送</button>
+    </div>
+  </section>
+  <aside class="right">
+    <div class="tabs">
+      <button class="tab on" data-tab="refs">参考库</button>
+      <button class="tab" data-tab="ints">集成</button>
+      <button class="tab" data-tab="arts">产物</button>
+    </div>
+    <div class="pane-body">
+      <div id="tab-refs" class="tabpane">
+        <button class="ghost sm" data-act="ref-add">+ 挂载参考库</button>
+        <div id="refList" class="list"></div>
+      </div>
+      <div id="tab-ints" class="tabpane hidden">
+        <button class="ghost sm" data-act="int-add">+ 连接集成</button>
+        <div id="intList" class="list"></div>
+      </div>
+      <div id="tab-arts" class="tabpane hidden">
+        <div id="artList" class="list"></div>
+      </div>
+    </div>
+  </aside>
+</div>
+<div id="palette" class="palette hidden">
+  <input id="paletteInput" placeholder="搜索命令…">
+  <div id="paletteItems" class="palette-items"></div>
+</div>
+<div id="shareModal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-title">分享链接</div>
+    <div id="shareUrl" class="share-url"></div>
+    <button id="shareCopy" class="ghost">复制</button>
+    <button id="shareClose">关闭</button>
+  </div>
+</div>
 <script src="app.js"></script>
 </body>
 </html>

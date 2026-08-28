@@ -165,6 +165,59 @@ public class RuntimeConfig {
     }
 
     @Bean
+    public com.lobster.sandbox.SandboxService sandboxService(com.lobster.store.ConfigStore configStore) {
+        return new com.lobster.sandbox.SandboxService(p -> configStore.getValue(p).orElse(null));
+    }
+
+    @Bean
+    public com.lobster.command.CommandRegistry commandRegistry(Path stateDir) {
+        var reg = com.lobster.command.CommandRegistry.builtin();
+        reg.loadWorkspace(stateDir);
+        return reg;
+    }
+
+    @Bean
+    public com.lobster.store.IntegrationStore integrationStore(javax.sql.DataSource sharedDataSource, EventBus bus) {
+        return new com.lobster.store.IntegrationStore(
+                new org.springframework.jdbc.core.JdbcTemplate(sharedDataSource), bus);
+    }
+
+    @Bean
+    public com.lobster.store.ReferenceStore referenceStore(javax.sql.DataSource sharedDataSource, EventBus bus) {
+        return new com.lobster.store.ReferenceStore(
+                new org.springframework.jdbc.core.JdbcTemplate(sharedDataSource), bus);
+    }
+
+    @Bean
+    public com.lobster.store.ArtifactsStore artifactsStore(javax.sql.DataSource sharedDataSource, EventBus bus) {
+        return new com.lobster.store.ArtifactsStore(
+                new org.springframework.jdbc.core.JdbcTemplate(sharedDataSource), bus);
+    }
+
+    @Bean
+    public com.lobster.tool.builtin.ComputerBackend computerBackend(com.lobster.store.ConfigStore configStore) {
+        return new com.lobster.tool.builtin.LocalComputerBackend(
+                p -> configStore.getValue(p).orElse(null));
+    }
+
+    @Bean
+    public com.lobster.tool.builtin.ComputerTool computerTool(com.lobster.tool.builtin.ComputerBackend backend) {
+        return new com.lobster.tool.builtin.ComputerTool(backend);
+    }
+
+    @Bean
+    public com.lobster.store.ShareService shareService(javax.sql.DataSource sharedDataSource,
+                                                       MessageStore messageStore, EventBus bus) {
+        return new com.lobster.store.ShareService(
+                new org.springframework.jdbc.core.JdbcTemplate(sharedDataSource), messageStore, bus);
+    }
+
+    @Bean
+    public com.lobster.sandbox.WorktreeService worktreeService(com.lobster.store.ConfigStore configStore, Path stateDir) {
+        return new com.lobster.sandbox.WorktreeService(p -> configStore.getValue(p).orElse(null), stateDir);
+    }
+
+    @Bean
     public com.lobster.mcp.McpManager mcpManager(LobsterConfig config) {
         var mgr = new com.lobster.mcp.McpManager();
         var log = org.slf4j.LoggerFactory.getLogger(RuntimeConfig.class);
@@ -240,10 +293,13 @@ public class RuntimeConfig {
                                 com.lobster.store.AuditStore auditStore,
                                 com.lobster.store.SkillsStore skillsStore,
                                 com.lobster.agent.HookEngine hookEngine,
-                                com.lobster.mcp.McpManager mcpManager) {
+                                com.lobster.mcp.McpManager mcpManager,
+                                com.lobster.sandbox.SandboxService sandboxService,
+                                com.lobster.store.ReferenceStore referenceStore,
+                                com.lobster.tool.builtin.ComputerTool computerTool) {
         var tools = ToolRegistry.of(
                 new ReadTool(), new WriteTool(), new EditTool(),
-                new GlobTool(), new GrepTool(), new BashTool(),
+                new GlobTool(), new GrepTool(), new BashTool(sandboxService),
                 new TodoTool(), new QuestionTool(), new ListTool());
         tools.register(new com.lobster.tool.builtin.SkillTool(skillsStore));
         for (var mt : mcpManager.tools()) tools.register(mt);
@@ -267,9 +323,12 @@ public class RuntimeConfig {
         tools.register(new com.lobster.tool.builtin.PlanExitTool(loop.planMode()));
         tools.register(new com.lobster.tool.builtin.BackgroundSpawnTool(store, bus, loop, taskStore));
         tools.register(new com.lobster.tool.builtin.MemorySearchTool(memoryStore));
+        tools.register(computerTool);
         loop.setMemoryStore(memoryStore);
         loop.setAuditStore(auditStore);
         loop.setSkillNames(skillsStore.enabledNames());
+        loop.setReferenceNames(referenceStore.enabled().stream()
+                .map(com.lobster.store.ReferenceStore.Reference::name).toList());
         loop.setHookEngine(hookEngine);
         return loop;
     }

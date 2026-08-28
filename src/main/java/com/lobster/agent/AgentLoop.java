@@ -49,6 +49,8 @@ public class AgentLoop {
     private volatile java.util.function.Predicate<String> toolFilter;
     /** 注入 prompt 的可用技能名（null = 不注入）。 */
     private volatile java.util.List<String> skillNames = java.util.List.of();
+    /** 注入 prompt 的可用参考库名。 */
+    private volatile java.util.List<String> referenceNames = java.util.List.of();
     /** 当前 run 的 writer claim（run 内有效）。 */
     private final java.util.Map<String, com.lobster.store.WriterClaimStore.Claim> activeClaims =
             new java.util.concurrent.ConcurrentHashMap<>();
@@ -88,6 +90,10 @@ public class AgentLoop {
 
     public void setSkillNames(java.util.List<String> names) {
         this.skillNames = names == null ? java.util.List.of() : names;
+    }
+
+    public void setReferenceNames(java.util.List<String> names) {
+        this.referenceNames = names == null ? java.util.List.of() : names;
     }
 
     private boolean toolAllowed(String toolId) {
@@ -313,7 +319,7 @@ public class AgentLoop {
             // 组装请求
             List<LlmProvider.ToolSpec> toolSpecs = toolSpecs();
             String system = promptAssembler.assemble(toolSpecs, java.nio.file.Path.of(
-                    System.getProperty("user.dir")), skillNames);
+                    System.getProperty("user.dir")), skillNames, referenceNames);
             List<LlmProvider.ChatMsg> messages = toChatMessages(history, sessionId);
 
             // 消费 LLM 流

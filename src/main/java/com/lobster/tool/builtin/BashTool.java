@@ -16,6 +16,12 @@ public class BashTool implements Tool {
 
     static final long DEFAULT_TIMEOUT_MS = 120_000;
 
+    private final com.lobster.sandbox.SandboxService sandbox;
+
+    public BashTool() { this(null); }
+
+    public BashTool(com.lobster.sandbox.SandboxService sandbox) { this.sandbox = sandbox; }
+
     @Override public String id() { return "bash"; }
 
     @Override public String description() {
@@ -35,6 +41,14 @@ public class BashTool implements Tool {
     @Override public ToolResult execute(JsonNode args, ToolContext ctx) throws Exception {
         String command = args.get("command").asText();
         long timeout = args.hasNonNull("timeout_ms") ? args.get("timeout_ms").asLong() : DEFAULT_TIMEOUT_MS;
+
+        if (sandbox != null) {
+            var sandboxed = sandbox.tryExecute(ctx.agentId(), command, timeout);
+            if (sandboxed.isPresent()) {
+                String out = sandboxed.get();
+                return ToolResult.of(command, out.isEmpty() ? "(no output)" : out);
+            }
+        }
 
         boolean windows = System.getProperty("os.name", "").toLowerCase().contains("win");
         ProcessBuilder pb = new ProcessBuilder(windows ? new String[]{"cmd", "/c", command}

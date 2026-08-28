@@ -53,6 +53,10 @@ public final class Events {
     public static final String MESSAGE_SENT = "message.sent";
     public static final String COMPACTION_DONE = "compaction.done";
     public static final String CHAT_SYSTEM_TRANSFORM = "chat.system.transform";
+    public static final String INTEGRATION_CHANGED = "integration.changed";
+    public static final String REFERENCE_CHANGED = "reference.changed";
+    public static final String ARTIFACT_CHANGED = "artifact.changed";
+    public static final String SHARE_CHANGED = "share.changed";
 
     private Events() {}
 }

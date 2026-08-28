@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.nio.file.Path;
 
 /** WS 帧协议处理器：req/res/event。 */
 @Component
@@ -55,6 +56,12 @@ public class WsHandler extends TextWebSocketHandler {
     private final com.lobster.store.ConfigStore configStore;
     private final com.lobster.store.PluginStore pluginStore;
     private final com.lobster.store.HookStore hookStore;
+    private final com.lobster.command.CommandRegistry commands;
+    private final com.lobster.store.IntegrationStore integrationStore;
+    private final com.lobster.store.ReferenceStore referenceStore;
+    private final com.lobster.store.ArtifactsStore artifactsStore;
+    private final com.lobster.store.ShareService shareService;
+    private final com.lobster.sandbox.WorktreeService worktreeService;
     private final Map<WebSocketSession, Runnable> unsubscribes = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, AuthInfo> authBySession = new ConcurrentHashMap<>();
@@ -81,7 +88,13 @@ public class WsHandler extends TextWebSocketHandler {
                      com.lobster.store.ChannelStore channelStore,
                      com.lobster.store.ConfigStore configStore,
                      com.lobster.store.PluginStore pluginStore,
-                     com.lobster.store.HookStore hookStore) {
+                     com.lobster.store.HookStore hookStore,
+                     com.lobster.command.CommandRegistry commands,
+                     com.lobster.store.IntegrationStore integrationStore,
+                     com.lobster.store.ReferenceStore referenceStore,
+                     com.lobster.store.ArtifactsStore artifactsStore,
+                     com.lobster.store.ShareService shareService,
+                     com.lobster.sandbox.WorktreeService worktreeService) {
         this.store = store;
         this.bus = bus;
         this.loop = loop;
@@ -104,6 +117,12 @@ public class WsHandler extends TextWebSocketHandler {
         this.configStore = configStore;
         this.pluginStore = pluginStore;
         this.hookStore = hookStore;
+        this.commands = commands;
+        this.integrationStore = integrationStore;
+        this.referenceStore = referenceStore;
+        this.artifactsStore = artifactsStore;
+        this.shareService = shareService;
+        this.worktreeService = worktreeService;
     }
 
     @Override
@@ -248,6 +267,23 @@ public class WsHandler extends TextWebSocketHandler {
             case "hooks.list" -> hooksList(session, id);
             case "hooks.setEnabled" -> hooksSetEnabled(session, id, params);
             case "hooks.remove" -> hooksRemove(session, id, params);
+            case "command.list" -> commandList(session, id);
+            case "integration.list" -> integrationList(session, id);
+            case "integration.connect.key" -> integrationConnectKey(session, id, params);
+            case "integration.connect.oauth" -> integrationConnectOauth(session, id, params);
+            case "integration.attempt.status" -> integrationAttemptStatus(session, id, params);
+            case "integration.attempt.complete" -> integrationAttemptComplete(session, id, params);
+            case "integration.attempt.cancel" -> integrationAttemptCancel(session, id, params);
+            case "reference.list" -> referenceList(session, id);
+            case "reference.install" -> referenceInstall(session, id, params);
+            case "reference.setEnabled" -> referenceSetEnabled(session, id, params);
+            case "reference.remove" -> referenceRemove(session, id, params);
+            case "artifact.list" -> artifactList(session, id, params);
+            case "artifact.attach" -> artifactAttach(session, id, params);
+            case "artifact.remove" -> artifactRemove(session, id, params);
+            case "share.create" -> shareCreate(session, id, params);
+            case "share.open" -> shareOpen(session, id, params);
+            case "worktree.create" -> worktreeCreate(session, id, params);
             default -> {
                 ObjectNode err = OM.createObjectNode();
                 err.put("code", "METHOD_NOT_FOUND");
@@ -1528,6 +1564,224 @@ public class WsHandler extends TextWebSocketHandler {
         }
         hookStore.remove(hookId);
         sendRes(session, id, true, OM.createObjectNode().put("hookId", hookId));
+    }
+
+    private void commandList(WebSocketSession session, String id) {
+        var cmds = commands.list();
+        ArrayNode arr = OM.valueToTree(cmds);
+        sendRes(session, id, true, OM.createObjectNode().set("commands", arr));
+    }
+
+    // ==================== M6 集成/OAuth（FR-I4） ====================
+
+    private void integrationList(WebSocketSession session, String id) {
+        var list = integrationStore.list();
+        sendRes(session, id, true, OM.createObjectNode().set("integrations", OM.valueToTree(list)));
+    }
+
+    private void integrationConnectKey(WebSocketSession session, String id, JsonNode params) {
+        String integrationId = params.path("id").asText();
+        String key = params.path("key").asText();
+        if (integrationId.isEmpty() || key.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "id 和 key 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        integrationStore.connectKey(integrationId, key);
+        sendRes(session, id, true, OM.createObjectNode().put("integrationId", integrationId));
+    }
+
+    private void integrationConnectOauth(WebSocketSession session, String id, JsonNode params) {
+        String integrationId = params.path("id").asText();
+        if (integrationId.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "id 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        var attempt = integrationStore.startOAuth(integrationId);
+        sendRes(session, id, true, OM.createObjectNode()
+                .put("integrationId", integrationId).put("attemptId", attempt.id()));
+    }
+
+    private void integrationAttemptStatus(WebSocketSession session, String id, JsonNode params) {
+        String attemptId = params.path("attemptId").asText();
+        var a = integrationStore.getAttempt(attemptId);
+        if (a == null) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "NOT_FOUND").put("message", "attempt 不存在");
+            sendRes(session, id, false, err);
+            return;
+        }
+        sendRes(session, id, true, OM.createObjectNode()
+                .put("attemptId", a.id()).put("status", a.status()).put("step", a.step()));
+    }
+
+    private void integrationAttemptComplete(WebSocketSession session, String id, JsonNode params) {
+        String attemptId = params.path("attemptId").asText();
+        String configJson = params.path("config").toString();
+        if (attemptId.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "attemptId 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        integrationStore.completeAttempt(attemptId, configJson);
+        sendRes(session, id, true, OM.createObjectNode().put("attemptId", attemptId));
+    }
+
+    private void integrationAttemptCancel(WebSocketSession session, String id, JsonNode params) {
+        String attemptId = params.path("attemptId").asText();
+        if (attemptId.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "attemptId 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        integrationStore.cancelAttempt(attemptId);
+        sendRes(session, id, true, OM.createObjectNode().put("attemptId", attemptId));
+    }
+
+    // ==================== M6 参考库 References（FR-I3） ====================
+
+    private void referenceList(WebSocketSession session, String id) {
+        sendRes(session, id, true,
+                OM.createObjectNode().set("references", OM.valueToTree(referenceStore.list())));
+    }
+
+    private void referenceInstall(WebSocketSession session, String id, JsonNode params) {
+        String name = params.path("name").asText();
+        String kind = params.path("kind").asText("local");
+        String uri = params.path("uri").asText();
+        String desc = params.path("description").asText("");
+        if (name.isEmpty() || uri.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "name 和 uri 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        var ref = referenceStore.install(name, kind, uri, desc);
+        sendRes(session, id, true, OM.createObjectNode().put("referenceId", ref.id()).put("name", ref.name()));
+    }
+
+    private void referenceSetEnabled(WebSocketSession session, String id, JsonNode params) {
+        String refId = params.path("id").asText();
+        boolean enabled = params.path("enabled").asBoolean(true);
+        if (refId.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "id 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        referenceStore.setEnabled(refId, enabled);
+        sendRes(session, id, true, OM.createObjectNode().put("id", refId).put("enabled", enabled));
+    }
+
+    private void referenceRemove(WebSocketSession session, String id, JsonNode params) {
+        String refId = params.path("id").asText();
+        if (refId.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "id 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        referenceStore.remove(refId);
+        sendRes(session, id, true, OM.createObjectNode().put("id", refId));
+    }
+
+    // ==================== M6 Artifacts（FR-I6） ====================
+
+    private void artifactList(WebSocketSession session, String id, JsonNode params) {
+        String sessionId = params.path("sessionId").asText();
+        var list = sessionId.isEmpty() ? List.of() : artifactsStore.listBySession(sessionId);
+        sendRes(session, id, true, OM.createObjectNode().set("artifacts", OM.valueToTree(list)));
+    }
+
+    private void artifactAttach(WebSocketSession session, String id, JsonNode params) {
+        String sessionId = params.path("sessionId").asText();
+        String agentId = params.path("agentId").asText();
+        String kind = params.path("kind").asText("generated");
+        String name = params.path("name").asText();
+        String path = params.path("path").asText("");
+        String mime = params.path("mime").asText("");
+        if (name.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "name 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        var a = artifactsStore.attach(sessionId, agentId, kind, name, path, mime);
+        sendRes(session, id, true, OM.createObjectNode().put("artifactId", a.id()).put("name", a.name()));
+    }
+
+    private void artifactRemove(WebSocketSession session, String id, JsonNode params) {
+        String artId = params.path("id").asText();
+        if (artId.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "id 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        artifactsStore.remove(artId);
+        sendRes(session, id, true, OM.createObjectNode().put("id", artId));
+    }
+
+    // ==================== M6 分享链接 Share（FR-I7） ====================
+
+    private void shareCreate(WebSocketSession session, String id, JsonNode params) {
+        String sessionKey = params.path("sessionKey").asText();
+        if (sessionKey.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "sessionKey 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        var sess = store.findByKey(sessionKey).orElse(null);
+        if (sess == null) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "NOT_FOUND").put("message", "会话不存在");
+            sendRes(session, id, false, err);
+            return;
+        }
+        String token = shareService.create(sess.id());
+        ObjectNode res = OM.createObjectNode();
+        res.put("token", token).put("url", "/share/" + token).put("sessionId", sess.id());
+        sendRes(session, id, true, res);
+    }
+
+    private void shareOpen(WebSocketSession session, String id, JsonNode params) {
+        String token = params.path("token").asText();
+        if (token.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "token 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        ObjectNode res = OM.createObjectNode();
+        res.put("sessionId", shareService.sessionIdOf(token));
+        res.set("messages", shareService.exportMessages(token));
+        sendRes(session, id, true, res);
+    }
+
+    // ==================== M6 托管工作树 Worktree（FR-I8） ====================
+
+    private void worktreeCreate(WebSocketSession session, String id, JsonNode params) {
+        String agentId = params.path("agentId").asText();
+        if (agentId.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "agentId 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        try {
+            Path p = worktreeService.create(agentId);
+            sendRes(session, id, true, OM.createObjectNode().put("agentId", agentId).put("path", p.toString()));
+        } catch (Exception e) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "WORKTREE_ERROR").put("message", e.getMessage());
+            sendRes(session, id, false, err);
+        }
     }
 
     private void sendRes(WebSocketSession session, String id, boolean ok, JsonNode payload) {
