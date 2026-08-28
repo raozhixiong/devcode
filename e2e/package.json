@@ -1,0 +1,14 @@
+{
+  "name": "lobster-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Lobster 龙虾工作台前端 E2E 测试（Playwright）",
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "install:browser": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
+  }
+}
