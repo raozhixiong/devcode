@@ -33,6 +33,9 @@
       <button class="tab on" data-tab="refs">参考库</button>
       <button class="tab" data-tab="ints">集成</button>
       <button class="tab" data-tab="arts">产物</button>
+      <button class="tab" data-tab="approvals">审批</button>
+      <button class="tab" data-tab="audit">审计</button>
+      <button class="tab" data-tab="settings">设置</button>
     </div>
     <div class="pane-body">
       <div id="tab-refs" class="tabpane">
@@ -45,6 +48,19 @@
       </div>
       <div id="tab-arts" class="tabpane hidden">
         <div id="artList" class="list"></div>
+      </div>
+      <div id="tab-approvals" class="tabpane hidden">
+        <button class="ghost sm" data-act="approval-refresh">刷新</button>
+        <div id="approvalList" class="list"></div>
+      </div>
+      <div id="tab-audit" class="tabpane hidden">
+        <button class="ghost sm" data-act="audit-refresh">刷新</button>
+        <div id="auditList" class="list"></div>
+      </div>
+      <div id="tab-settings" class="tabpane hidden">
+        <div id="cfgList" class="list"></div>
+        <div class="pane-head" style="margin-top:12px">插件</div>
+        <div id="pluginList" class="list"></div>
       </div>
     </div>
   </aside>

@@ -213,6 +213,68 @@
     });
   }
 
+  /* 审批中心 */
+  async function renderApprovals() {
+    const box = $("approvalList"); box.innerHTML = "";
+    const r = await rpc("approval.list", {});
+    const list = (r.payload && r.payload.approvals) || [];
+    list.forEach(a => {
+      const d = document.createElement("div"); d.className = "item";
+      d.innerHTML = '<span class="name"></span><div class="meta"></div><div class="perm-btns" style="margin-top:6px"></div>';
+      d.querySelector(".name").textContent = a.kind + " · " + (a.status || "");
+      d.querySelector(".meta").textContent = (a.requester || "") + " — " + JSON.stringify(a.payload || {}).slice(0, 80);
+      const btns = d.querySelector(".perm-btns");
+      if (a.status === "pending") {
+        const ok = document.createElement("button"); ok.textContent = "通过";
+        ok.onclick = async () => { await rpc("approval.resolve", { id: a.id, approved: true }); renderApprovals(); };
+        const no = document.createElement("button"); no.textContent = "拒绝"; no.className = "deny";
+        no.onclick = async () => { await rpc("approval.resolve", { id: a.id, approved: false, reason: "rejected" }); renderApprovals(); };
+        btns.appendChild(ok); btns.appendChild(no);
+      }
+      box.appendChild(d);
+    });
+  }
+
+  /* 审计台账 */
+  async function renderAudit() {
+    const box = $("auditList"); box.innerHTML = "";
+    const r = await rpc("audit.activity.list", { limit: 80 });
+    const list = (r.payload && r.payload.events) || (r.payload && r.payload.activities) || [];
+    (list || []).forEach(e => {
+      const d = document.createElement("div"); d.className = "item";
+      d.innerHTML = '<span class="name"></span><div class="meta"></div>';
+      d.querySelector(".name").textContent = (e.kind || e.action || "") + " · " + (e.result || "");
+      d.querySelector(".meta").textContent = new Date((e.ts || 0)).toLocaleString() + " · " + (e.actor || "");
+      box.appendChild(d);
+    });
+  }
+
+  /* 配置中心 + 插件 */
+  async function renderSettings() {
+    const cfgBox = $("cfgList"); cfgBox.innerHTML = "";
+    const cr = await rpc("config.list", {});
+    (cr.payload && cr.payload.entries || []).forEach(en => {
+      const d = document.createElement("div"); d.className = "item";
+      d.innerHTML = '<span class="name"></span><div class="meta"></div><input class="cfg-val" style="margin-top:6px;width:100%;background:#0c0f14;color:#e6e6e6;border:1px solid #2a3140;border-radius:6px;padding:6px" />';
+      d.querySelector(".name").textContent = en.path;
+      d.querySelector(".meta").textContent = (en.description || "") + " [" + (en.reloadKind || "") + "]";
+      const inp = d.querySelector(".cfg-val"); inp.value = en.value != null ? en.value : "";
+      inp.onchange = () => rpc("config.set", { path: en.path, value: inp.value });
+      cfgBox.appendChild(d);
+    });
+    const plBox = $("pluginList"); plBox.innerHTML = "";
+    const pr = await rpc("plugins.list", {});
+    (pr.payload && pr.payload.plugins || []).forEach(p => {
+      const d = document.createElement("div"); d.className = "item";
+      d.innerHTML = '<span class="name"></span><span class="badge ' + (p.enabled ? "" : "off") + '"></span><div class="meta"></div>';
+      d.querySelector(".name").textContent = p.name + " v" + (p.version || "");
+      d.querySelector(".badge").textContent = p.enabled ? "启用" : "停用";
+      d.querySelector(".meta").textContent = (p.source || "") + " · " + (p.description || "");
+      d.onclick = () => rpc("plugins.setEnabled", { id: p.id, enabled: !p.enabled }).then(renderSettings);
+      plBox.appendChild(d);
+    });
+  }
+
   /* ⌘K / 斜杠 / @ 面板 */
   function openPalette(mode, items) {
     paletteMode = mode; paletteItems = items; paletteSel = 0;
@@ -308,7 +370,12 @@
     document.querySelectorAll(".tabpane").forEach(p => p.classList.add("hidden"));
     $("tab-" + t.dataset.tab).classList.remove("hidden");
     if (t.dataset.tab === "refs") rpc("reference.list", {}).then(r => renderReferences(r.payload.references || []));
+    else if (t.dataset.tab === "approvals") renderApprovals();
+    else if (t.dataset.tab === "audit") renderAudit();
+    else if (t.dataset.tab === "settings") renderSettings();
   });
+  document.querySelector('[data-act="approval-refresh"]').onclick = renderApprovals;
+  document.querySelector('[data-act="audit-refresh"]').onclick = renderAudit;
   $("shareClose").onclick = () => $("shareModal").classList.add("hidden");
   $("shareCopy").onclick = () => navigator.clipboard.writeText($("shareUrl").textContent);
   document.querySelector('[data-act="ref-add"]').onclick = async () => {
