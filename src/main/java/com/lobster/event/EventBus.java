@@ -75,10 +75,12 @@ public class EventBus {
         for (Consumer<LobsterEvent> l : globalListeners) {
             try { l.accept(event); } catch (RuntimeException ignored) {}
         }
-        var list = aggregateListeners.get(event.aggregateId());
-        if (list != null) {
-            for (Consumer<LobsterEvent> l : list) {
-                try { l.accept(event); } catch (RuntimeException ignored) {}
+        if (event.aggregateId() != null) {
+            var list = aggregateListeners.get(event.aggregateId());
+            if (list != null) {
+                for (Consumer<LobsterEvent> l : list) {
+                    try { l.accept(event); } catch (RuntimeException ignored) {}
+                }
             }
         }
     }

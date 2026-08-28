@@ -367,7 +367,7 @@ public class RuntimeConfig {
     }
 
     /** 供 WsHandler 使用的回复便捷方法（静态，避免循环依赖）。 */
-    static PermissionReply toReply(String decision) {
+    public static PermissionReply toReply(String decision) {
         return switch (decision == null ? "" : decision) {
             case "ALLOW_ALWAYS" -> new PermissionReply(PermissionReply.Decision.ALLOW_ALWAYS, null);
             case "ALLOW_ONCE", "ALLOW" -> new PermissionReply(PermissionReply.Decision.ALLOW_ONCE, null);
