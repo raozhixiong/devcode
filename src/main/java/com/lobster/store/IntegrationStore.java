@@ -57,8 +57,9 @@ public class IntegrationStore {
     }
 
     public void connectKey(String id, String key) {
+        String cfg = "{\"key\":\"" + key.replace("\"", "\\\"") + "\"}";
         jdbc.update("UPDATE integrations SET status=?, config_json=?, updated_at=? WHERE id=?",
-                "connected", "{\"key\":\"set\"}", System.currentTimeMillis(), id);
+                "connected", cfg, System.currentTimeMillis(), id);
         publish();
     }
 

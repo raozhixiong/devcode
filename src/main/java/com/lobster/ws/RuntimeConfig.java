@@ -11,6 +11,7 @@ import com.lobster.permission.PermissionEngine;
 import com.lobster.permission.PermissionRule;
 import com.lobster.store.AgentDb;
 import com.lobster.store.MessageStore;
+import com.lobster.store.ShareService;
 import com.lobster.tool.PermissionReply;
 import com.lobster.tool.ToolRegistry;
 import com.lobster.tool.builtin.*;
@@ -154,6 +155,11 @@ public class RuntimeConfig {
     }
 
     @Bean
+    public com.lobster.store.PluginMarketplace pluginMarketplace() {
+        return new com.lobster.store.PluginMarketplace();
+    }
+
+    @Bean
     public com.lobster.store.HookStore hookStore(javax.sql.DataSource sharedDataSource, EventBus bus) {
         return new com.lobster.store.HookStore(
                 new org.springframework.jdbc.core.JdbcTemplate(sharedDataSource), bus);
@@ -189,6 +195,23 @@ public class RuntimeConfig {
     }
 
     @Bean
+    public com.lobster.store.ReferenceLoader referenceLoader(com.lobster.store.ConfigStore configStore, Path stateDir) {
+        return new com.lobster.store.ReferenceLoader(p -> configStore.getValue(p).orElse(null));
+    }
+
+    @Bean
+    public com.lobster.tool.builtin.ReferenceTool referenceTool(com.lobster.store.ReferenceStore referenceStore,
+                                                                com.lobster.store.ReferenceLoader referenceLoader, Path stateDir) {
+        return new com.lobster.tool.builtin.ReferenceTool(referenceStore, referenceLoader, stateDir);
+    }
+
+    @Bean
+    public com.lobster.command.CommandExecutor commandExecutor(MessageStore messageStore,
+                                                                AgentLoop agentLoop, ShareService shareService) {
+        return new com.lobster.command.CommandExecutor(messageStore, agentLoop, shareService);
+    }
+
+    @Bean
     public com.lobster.store.ArtifactsStore artifactsStore(javax.sql.DataSource sharedDataSource, EventBus bus) {
         return new com.lobster.store.ArtifactsStore(
                 new org.springframework.jdbc.core.JdbcTemplate(sharedDataSource), bus);
@@ -203,6 +226,12 @@ public class RuntimeConfig {
     @Bean
     public com.lobster.tool.builtin.ComputerTool computerTool(com.lobster.tool.builtin.ComputerBackend backend) {
         return new com.lobster.tool.builtin.ComputerTool(backend);
+    }
+
+    @Bean
+    public com.lobster.tool.builtin.TtsTool ttsTool(Path stateDir) {
+        var cfg = (java.util.function.Function<String, String>) k -> System.getProperty("lobster.tts." + k);
+        return new com.lobster.tool.builtin.TtsTool(stateDir, cfg);
     }
 
     @Bean
@@ -296,7 +325,9 @@ public class RuntimeConfig {
                                 com.lobster.mcp.McpManager mcpManager,
                                 com.lobster.sandbox.SandboxService sandboxService,
                                 com.lobster.store.ReferenceStore referenceStore,
-                                com.lobster.tool.builtin.ComputerTool computerTool) {
+                                com.lobster.tool.builtin.ComputerTool computerTool,
+                                com.lobster.tool.builtin.ReferenceTool referenceTool,
+                                com.lobster.tool.builtin.TtsTool ttsTool) {
         var tools = ToolRegistry.of(
                 new ReadTool(), new WriteTool(), new EditTool(),
                 new GlobTool(), new GrepTool(), new BashTool(sandboxService),
@@ -324,6 +355,8 @@ public class RuntimeConfig {
         tools.register(new com.lobster.tool.builtin.BackgroundSpawnTool(store, bus, loop, taskStore));
         tools.register(new com.lobster.tool.builtin.MemorySearchTool(memoryStore));
         tools.register(computerTool);
+        tools.register(referenceTool);
+        tools.register(ttsTool);
         loop.setMemoryStore(memoryStore);
         loop.setAuditStore(auditStore);
         loop.setSkillNames(skillsStore.enabledNames());

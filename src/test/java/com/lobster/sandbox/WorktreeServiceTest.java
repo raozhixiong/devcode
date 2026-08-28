@@ -38,7 +38,7 @@ class WorktreeServiceTest {
     @Test
     void createWorktree() throws Exception {
         gitInit();
-        var svc = new WorktreeService(p -> "true", repo);
+        var svc = new WorktreeService(p -> p.equals("worktree.enabled") ? "true" : "exit 0", repo);
         assertTrue(svc.enabled());
         Path wt = svc.create("agentA");
         assertTrue(Files.exists(wt));

@@ -39,7 +39,23 @@ public class WorktreeService {
             throw new IllegalStateException("创建 worktree 失败: "
                     + new String(p.getInputStream().readAllBytes()));
         }
+        runSetup(base);
         return base;
+    }
+
+    private void runSetup(Path base) throws Exception {
+        String setup = cfg.apply("worktree.setup_cmd");
+        if (setup == null || setup.isBlank()) return;
+        boolean windows = System.getProperty("os.name").toLowerCase().contains("win");
+        List<String> cmd = windows
+                ? List.of("cmd.exe", "/c", setup)
+                : List.of("sh", "-c", setup);
+        Process p = new ProcessBuilder(cmd).directory(base.toFile()).redirectErrorStream(true).start();
+        int code = p.waitFor();
+        if (code != 0) {
+            throw new IllegalStateException("worktree 初始化命令失败: "
+                    + new String(p.getInputStream().readAllBytes()));
+        }
     }
 
     private boolean branchExists(String branch) throws Exception {

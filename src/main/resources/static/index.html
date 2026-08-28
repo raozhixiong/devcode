@@ -33,6 +33,9 @@
       <button class="tab on" data-tab="refs">参考库</button>
       <button class="tab" data-tab="ints">集成</button>
       <button class="tab" data-tab="arts">产物</button>
+      <button class="tab" data-tab="hooks">钩子</button>
+      <button class="tab" data-tab="skills">技能</button>
+      <button class="tab" data-tab="market">市场</button>
       <button class="tab" data-tab="approvals">审批</button>
       <button class="tab" data-tab="audit">审计</button>
       <button class="tab" data-tab="settings">设置</button>
@@ -48,6 +51,17 @@
       </div>
       <div id="tab-arts" class="tabpane hidden">
         <div id="artList" class="list"></div>
+      </div>
+      <div id="tab-hooks" class="tabpane hidden">
+        <button class="ghost sm" data-act="hook-add">+ 安装钩子</button>
+        <div id="hookList" class="list"></div>
+      </div>
+      <div id="tab-skills" class="tabpane hidden">
+        <div id="skillList" class="list"></div>
+      </div>
+      <div id="tab-market" class="tabpane hidden">
+        <button class="ghost sm" data-act="market-refresh">刷新市场</button>
+        <div id="marketList" class="list"></div>
       </div>
       <div id="tab-approvals" class="tabpane hidden">
         <button class="ghost sm" data-act="approval-refresh">刷新</button>

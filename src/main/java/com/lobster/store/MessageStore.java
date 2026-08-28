@@ -209,6 +209,12 @@ public class MessageStore {
         return msg;
     }
 
+    /** 清空会话全部消息（命令 /clear 用）。 */
+    public void clearSession(String sessionId) {
+        jdbc.update("DELETE FROM part WHERE session_id=?", sessionId);
+        jdbc.update("DELETE FROM message WHERE session_id=?", sessionId);
+    }
+
     public List<Message> loadActive(String sessionId) {
         List<Message> messages = jdbc.query(
                 "SELECT id FROM message WHERE session_id=? ORDER BY created_at, id",

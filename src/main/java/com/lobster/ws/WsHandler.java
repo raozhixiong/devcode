@@ -13,6 +13,7 @@ import com.lobster.event.LobsterEvent;
 import com.lobster.model.Message;
 import com.lobster.model.Part;
 import com.lobster.store.MessageStore;
+import com.lobster.tool.ToolContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -55,10 +56,13 @@ public class WsHandler extends TextWebSocketHandler {
     private final com.lobster.store.ChannelStore channelStore;
     private final com.lobster.store.ConfigStore configStore;
     private final com.lobster.store.PluginStore pluginStore;
+    private final com.lobster.store.PluginMarketplace pluginMarketplace;
     private final com.lobster.store.HookStore hookStore;
     private final com.lobster.command.CommandRegistry commands;
     private final com.lobster.store.IntegrationStore integrationStore;
     private final com.lobster.store.ReferenceStore referenceStore;
+    private final com.lobster.tool.builtin.ReferenceTool referenceTool;
+    private final com.lobster.command.CommandExecutor commandExecutor;
     private final com.lobster.store.ArtifactsStore artifactsStore;
     private final com.lobster.store.ShareService shareService;
     private final com.lobster.sandbox.WorktreeService worktreeService;
@@ -88,10 +92,13 @@ public class WsHandler extends TextWebSocketHandler {
                      com.lobster.store.ChannelStore channelStore,
                      com.lobster.store.ConfigStore configStore,
                      com.lobster.store.PluginStore pluginStore,
+                     com.lobster.store.PluginMarketplace pluginMarketplace,
                      com.lobster.store.HookStore hookStore,
                      com.lobster.command.CommandRegistry commands,
                      com.lobster.store.IntegrationStore integrationStore,
                      com.lobster.store.ReferenceStore referenceStore,
+                     com.lobster.tool.builtin.ReferenceTool referenceTool,
+                     com.lobster.command.CommandExecutor commandExecutor,
                      com.lobster.store.ArtifactsStore artifactsStore,
                      com.lobster.store.ShareService shareService,
                      com.lobster.sandbox.WorktreeService worktreeService) {
@@ -116,10 +123,13 @@ public class WsHandler extends TextWebSocketHandler {
         this.channelStore = channelStore;
         this.configStore = configStore;
         this.pluginStore = pluginStore;
+        this.pluginMarketplace = pluginMarketplace;
         this.hookStore = hookStore;
         this.commands = commands;
         this.integrationStore = integrationStore;
         this.referenceStore = referenceStore;
+        this.referenceTool = referenceTool;
+        this.commandExecutor = commandExecutor;
         this.artifactsStore = artifactsStore;
         this.shareService = shareService;
         this.worktreeService = worktreeService;
@@ -263,12 +273,15 @@ public class WsHandler extends TextWebSocketHandler {
             case "plugins.install" -> pluginsInstall(session, id, params);
             case "plugins.setEnabled" -> pluginsSetEnabled(session, id, params);
             case "plugins.uninstall" -> pluginsUninstall(session, id, params);
+            case "plugins.marketplace" -> pluginsMarketplace(session, id);
             case "hooks.install" -> hooksInstall(session, id, params);
             case "hooks.list" -> hooksList(session, id);
             case "hooks.setEnabled" -> hooksSetEnabled(session, id, params);
             case "hooks.remove" -> hooksRemove(session, id, params);
             case "command.list" -> commandList(session, id);
+            case "command.run" -> commandRun(session, id, params);
             case "integration.list" -> integrationList(session, id);
+            case "integration.install" -> integrationInstall(session, id, params);
             case "integration.connect.key" -> integrationConnectKey(session, id, params);
             case "integration.connect.oauth" -> integrationConnectOauth(session, id, params);
             case "integration.attempt.status" -> integrationAttemptStatus(session, id, params);
@@ -278,6 +291,7 @@ public class WsHandler extends TextWebSocketHandler {
             case "reference.install" -> referenceInstall(session, id, params);
             case "reference.setEnabled" -> referenceSetEnabled(session, id, params);
             case "reference.remove" -> referenceRemove(session, id, params);
+            case "reference.read" -> referenceRead(session, id, params);
             case "artifact.list" -> artifactList(session, id, params);
             case "artifact.attach" -> artifactAttach(session, id, params);
             case "artifact.remove" -> artifactRemove(session, id, params);
@@ -889,6 +903,16 @@ public class WsHandler extends TextWebSocketHandler {
     private void chatSend(WebSocketSession session, String id, JsonNode params) {
         String sessionKey = params.path("sessionKey").asText("main");
         String text = params.path("text").asText();
+        // 命令路由：slash 命令走服务端执行器（FR-I2 程序调用）
+        if (text.startsWith("/")) {
+            var s = store.findByKey(sessionKey)
+                    .orElseGet(() -> store.createSession(sessionKey, "main", System.getProperty("user.dir")));
+            var r = commandExecutor.execute(text, s.id());
+            ObjectNode payload = OM.createObjectNode()
+                    .put("status", r.ok() ? "done" : "error").put("output", r.output());
+            sendRes(session, id, r.ok(), payload);
+            return;
+        }
         var existing = store.findByKey(sessionKey);
         var s = existing.orElseGet(() ->
                 store.createSession(sessionKey, "main", System.getProperty("user.dir")));
@@ -1515,6 +1539,12 @@ public class WsHandler extends TextWebSocketHandler {
         sendRes(session, id, true, OM.createObjectNode().put("pluginId", pluginId));
     }
 
+    private void pluginsMarketplace(WebSocketSession session, String id) {
+        var catalog = pluginMarketplace.catalog();
+        ArrayNode arr = OM.valueToTree(catalog);
+        sendRes(session, id, true, OM.createObjectNode().set("plugins", arr));
+    }
+
     // ==================== M6 钩子 RPC（FR-I1） ====================
 
     private void hooksInstall(WebSocketSession session, String id, JsonNode params) {
@@ -1590,6 +1620,22 @@ public class WsHandler extends TextWebSocketHandler {
         }
         integrationStore.connectKey(integrationId, key);
         sendRes(session, id, true, OM.createObjectNode().put("integrationId", integrationId));
+    }
+
+    private void integrationInstall(WebSocketSession session, String id, JsonNode params) {
+        String name = params.path("name").asText();
+        String kind = params.path("kind").asText();
+        String key = params.path("key").asText();
+        if (name.isEmpty() || kind.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "name 和 kind 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        var it = integrationStore.install(name, kind);
+        if (!key.isEmpty()) integrationStore.connectKey(it.id(), key);
+        sendRes(session, id, true, OM.createObjectNode()
+                .put("integrationId", it.id()).put("name", it.name()).put("status", it.status()));
     }
 
     private void integrationConnectOauth(WebSocketSession session, String id, JsonNode params) {
@@ -1782,6 +1828,44 @@ public class WsHandler extends TextWebSocketHandler {
             err.put("code", "WORKTREE_ERROR").put("message", e.getMessage());
             sendRes(session, id, false, err);
         }
+    }
+
+    private void referenceRead(WebSocketSession session, String id, JsonNode params) {
+        String name = params.path("name").asText();
+        String refId = params.path("id").asText();
+        var ref = refId.isEmpty() ? referenceStore.getByName(name) : referenceStore.get(refId);
+        if (ref == null) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "NOT_FOUND").put("message", "参考库不存在");
+            sendRes(session, id, false, err);
+            return;
+        }
+        try {
+            var content = referenceTool.execute(
+                    OM.createObjectNode().put("name", ref.name()), ToolContext.dummy()).output();
+            ObjectNode res = OM.createObjectNode();
+            res.put("id", ref.id()).put("name", ref.name()).put("content", content);
+            sendRes(session, id, true, res);
+        } catch (Exception e) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "READ_ERROR").put("message", e.getMessage());
+            sendRes(session, id, false, err);
+        }
+    }
+
+    private void commandRun(WebSocketSession session, String id, JsonNode params) {
+        String slash = params.path("slash").asText();
+        String sessionId = params.path("sessionId").asText();
+        if (sessionId.isEmpty()) {
+            ObjectNode err = OM.createObjectNode();
+            err.put("code", "BAD_REQUEST").put("message", "sessionId 必填");
+            sendRes(session, id, false, err);
+            return;
+        }
+        var r = commandExecutor.execute(slash, sessionId);
+        ObjectNode payload = OM.createObjectNode()
+                .put("status", r.ok() ? "done" : "error").put("output", r.output());
+        sendRes(session, id, r.ok(), payload);
     }
 
     private void sendRes(WebSocketSession session, String id, boolean ok, JsonNode payload) {

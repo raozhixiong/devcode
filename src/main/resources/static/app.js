@@ -275,6 +275,50 @@
     });
   }
 
+  /* 钩子 */
+  async function renderHooks() {
+    const box = $("hookList"); box.innerHTML = "";
+    const r = await rpc("hooks.list", {});
+    (r.payload && r.payload.hooks || []).forEach(h => {
+      const d = document.createElement("div"); d.className = "item";
+      d.innerHTML = '<span class="name"></span><span class="badge ' + (h.enabled ? "" : "off") + '"></span><div class="meta"></div>';
+      d.querySelector(".name").textContent = h.event + " · " + (h.command || h.commandText || "").slice(0, 40);
+      d.querySelector(".badge").textContent = h.enabled ? "启用" : "停用";
+      d.querySelector(".meta").textContent = "优先级 " + (h.priority || 0);
+      box.appendChild(d);
+    });
+  }
+  /* 技能 */
+  async function renderSkills() {
+    const box = $("skillList"); box.innerHTML = "";
+    const r = await rpc("skills.list", {});
+    (r.payload && r.payload.skills || []).forEach(s => {
+      const d = document.createElement("div"); d.className = "item";
+      d.innerHTML = '<span class="name"></span><span class="badge ' + (s.enabled ? "" : "off") + '"></span><div class="meta"></div>';
+      d.querySelector(".name").textContent = s.name;
+      d.querySelector(".badge").textContent = s.enabled ? "启用" : "停用";
+      d.querySelector(".meta").textContent = (s.description || "").slice(0, 80);
+      d.onclick = () => rpc("skills.setEnabled", { id: s.id, enabled: !s.enabled }).then(renderSkills);
+      box.appendChild(d);
+    });
+  }
+  /* 插件市场 */
+  async function renderMarket() {
+    const box = $("marketList"); box.innerHTML = "";
+    const r = await rpc("plugins.marketplace", {});
+    (r.payload && r.payload.plugins || []).forEach(p => {
+      const d = document.createElement("div"); d.className = "item";
+      d.innerHTML = '<span class="name"></span><div class="meta"></div><button class="ghost sm" style="margin-top:6px">安装</button>';
+      d.querySelector(".name").textContent = p.name + " v" + (p.version || "");
+      d.querySelector(".meta").textContent = p.description || p.source || "";
+      d.querySelector("button").onclick = async () => {
+        await rpc("plugins.install", { name: p.name, source: p.source, version: p.version });
+        sys("已安装插件: " + p.name);
+      };
+      box.appendChild(d);
+    });
+  }
+
   /* ⌘K / 斜杠 / @ 面板 */
   function openPalette(mode, items) {
     paletteMode = mode; paletteItems = items; paletteSel = 0;
@@ -373,9 +417,14 @@
     else if (t.dataset.tab === "approvals") renderApprovals();
     else if (t.dataset.tab === "audit") renderAudit();
     else if (t.dataset.tab === "settings") renderSettings();
+    else if (t.dataset.tab === "hooks") renderHooks();
+    else if (t.dataset.tab === "skills") renderSkills();
+    else if (t.dataset.tab === "market") renderMarket();
+    else if (t.dataset.tab === "ints") rpc("integration.list", {}).then(r => renderIntegrations(r.payload.integrations || []));
   });
   document.querySelector('[data-act="approval-refresh"]').onclick = renderApprovals;
   document.querySelector('[data-act="audit-refresh"]').onclick = renderAudit;
+  document.querySelector('[data-act="market-refresh"]').onclick = renderMarket;
   $("shareClose").onclick = () => $("shareModal").classList.add("hidden");
   $("shareCopy").onclick = () => navigator.clipboard.writeText($("shareUrl").textContent);
   document.querySelector('[data-act="ref-add"]').onclick = async () => {
@@ -384,11 +433,19 @@
     await rpc("reference.install", { name, kind: "url", uri });
     const r = await rpc("reference.list", {}); renderReferences(r.payload.references || []);
   };
+  document.querySelector('[data-act="hook-add"]').onclick = async () => {
+    const event = prompt("触发事件（如 tool.before / agent.run.ended）："); if (!event) return;
+    const command = prompt("执行命令："); if (!command) return;
+    await rpc("hooks.install", { scope: "global", scopeId: "global", event, kind: "command", command, timeout: 5000 });
+    renderHooks(); sys("已安装钩子: " + event);
+  };
   document.querySelector('[data-act="int-add"]').onclick = async () => {
     const name = prompt("集成名称："); if (!name) return;
     const kind = prompt("类型（oauth/key）：", "key"); if (!kind) return;
-    const it = await rpc("integration.connect.key", { id: (await rpc("integration.list", {})).payload.integrations.length, key: "" }).catch(() => null);
-    sys("集成连接需后端实现，已记录意图: " + name);
+    const key = kind === "key" ? (prompt("API Key：") || "") : "";
+    await rpc("integration.install", { name, kind, key });
+    const r = await rpc("integration.list", {}); renderIntegrations(r.payload.integrations || []);
+    sys("已连接集成: " + name);
   };
 
   renderSessions();

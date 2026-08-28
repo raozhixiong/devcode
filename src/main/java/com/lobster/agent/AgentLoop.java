@@ -274,6 +274,11 @@ public class AgentLoop {
         return active;
     }
 
+    /** 手动触发压缩（命令 /compact 用）。 */
+    public void compactNow(String sessionId) {
+        autoCompact(sessionId, store.loadActive(sessionId));
+    }
+
     private void runLoop(String sessionId) {
         int step = 0;
         java.util.Map<String, Integer> toolCallCounts = new java.util.HashMap<>();

@@ -41,6 +41,11 @@ public class ReferenceStore {
                         ReferenceStore::map, id).stream().findFirst().orElse(null);
     }
 
+    public Reference getByName(String name) {
+        return jdbc.query("SELECT id, name, kind, uri, description, enabled FROM ref_entries WHERE name=?",
+                        ReferenceStore::map, name).stream().findFirst().orElse(null);
+    }
+
     public List<Reference> list() {
         return jdbc.query("SELECT id, name, kind, uri, description, enabled FROM ref_entries ORDER BY name",
                 ReferenceStore::map);
