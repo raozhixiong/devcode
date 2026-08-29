@@ -178,6 +178,14 @@ public class SessionRpc extends BaseRpc {
     }
 
     private void sessionsList(String id) {
-        sendRes(id, true, on().set("sessions", arr()));
+        var list = store.listSessions();
+        ArrayNode a = arr();
+        for (var s : list) {
+            a.add(on().put("id", s.id()).put("sessionKey", s.sessionKey())
+                    .put("kind", s.kind())
+                    .put("title", s.title() == null || s.title().isEmpty() ? s.sessionKey() : s.title())
+                    .put("createdAt", s.createdAt()).put("updatedAt", s.updatedAt()));
+        }
+        sendRes(id, true, on().set("sessions", a));
     }
 }

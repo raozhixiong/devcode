@@ -90,6 +90,7 @@
         if (ev.event === "session.status" && p.type !== "idle") break;
         streamingText = null; setBusy(false);
         rpc("artifact.list", { sessionId: currentSession }).then(r => renderArtifacts(r.payload.artifacts || [])).catch(() => {});
+        refreshSessions();
         break;
       case "permission.asked": showPermissionDialog(p.requestId, p.permission, p.patterns || []); break;
       case "permission.replied": hidePermission(); break;
@@ -118,7 +119,7 @@
 
   function onReady() {
     bootstrap();
-    renderSessions();
+    refreshSessions();
     loadAgents();
     refreshActiveView();
   }
@@ -207,11 +208,22 @@
       box.appendChild(d);
     });
   }
+  async function refreshSessions() {
+    try {
+      const r = await rpc("sessions.list", {});
+      const server = (r.payload && r.payload.sessions) || [];
+      const map = new Map();
+      server.forEach(s => map.set(s.sessionKey, { key: s.sessionKey, title: s.title || s.sessionKey, id: s.id }));
+      sessions.forEach(local => { if (!map.has(local.key)) map.set(local.key, local); });
+      sessions = Array.from(map.values());
+    } catch (e) {}
+    renderSessions();
+  }
   function switchSession(k) { currentSession = k; renderSessions(); loadHistory(k); }
   async function newSession() {
     const k = prompt("新会话 key：", "s-" + Date.now());
     if (!k) return;
-    sessions.push({ key: k, title: k }); renderSessions(); switchSession(k);
+    sessions.push({ key: k, title: k }); currentSession = k; renderSessions(); loadHistory(k);
   }
   async function renameSession(k) {
     k = k || currentSession;
@@ -219,14 +231,14 @@
     const t = prompt("重命名会话：", s ? s.title : k);
     if (!t) return;
     try { await rpc("sessions.rename", { sessionKey: k, title: t }); } catch (e) { toast("重命名失败: " + (e.message || e)); return; }
-    if (s) s.title = t; renderSessions(); toast("已重命名");
+    await refreshSessions(); toast("已重命名");
   }
   async function forkSession(k) {
     k = k || currentSession;
     const nk = prompt("分叉后的新 key：", k + "-fork");
     if (!nk) return;
     try { const r = await rpc("sessions.fork", { sessionKey: k, newKey: nk }); const key = (r.payload && r.payload.sessionKey) || nk;
-      sessions.push({ key, title: key }); renderSessions(); switchSession(key); } catch (e) { toast("分叉失败: " + (e.message || e)); }
+      currentSession = key; await refreshSessions(); loadHistory(key); } catch (e) { toast("分叉失败: " + (e.message || e)); }
   }
   async function rewindSession(k) {
     k = k || currentSession;
@@ -237,8 +249,9 @@
   }
   async function archiveSession(k) {
     k = k || currentSession;
-    try { await rpc("sessions.archive", { sessionKey: k }); sessions = sessions.filter(x => x.key !== k);
-      if (currentSession === k && sessions.length) switchSession(sessions[0].key); else renderSessions(); toast("已归档"); }
+    try { await rpc("sessions.archive", { sessionKey: k }); await refreshSessions();
+      if (currentSession === k && !sessions.find(x => x.key === k)) { if (sessions.length) switchSession(sessions[0].key); else { currentSession = "main"; renderSessions(); loadHistory("main"); } }
+      toast("已归档"); }
     catch (e) { toast("归档失败: " + (e.message || e)); }
   }
   async function setQueueMode(mode) { try { await rpc("queue.mode.set", { sessionKey: currentSession, mode }); } catch (e) {} }

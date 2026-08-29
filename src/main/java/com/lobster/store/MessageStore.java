@@ -49,6 +49,15 @@ public class MessageStore {
         return rows.stream().findFirst();
     }
 
+    /** 列出全部未归档会话（按更新时间倒序），供会话树展示。 */
+    public List<Session> listSessions() {
+        return jdbc.query(
+                "SELECT id, session_key, kind, title, directory, created_at, updated_at " +
+                        "FROM session WHERE archived_at IS NULL ORDER BY updated_at DESC",
+                (rs, i) -> new Session(rs.getString(1), rs.getString(2), rs.getString(3),
+                        rs.getString(4), rs.getString(5), rs.getLong(6), rs.getLong(7)));
+    }
+
     /** 重命名/设置标题。 */
     public void setTitle(String sessionId, String title) {
         jdbc.update("UPDATE session SET title=?, updated_at=? WHERE id=?",
