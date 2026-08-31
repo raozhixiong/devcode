@@ -107,6 +107,8 @@
         break;
       case "permission.asked": showPermissionDialog(p.requestId, p.permission, p.patterns || []); break;
       case "permission.replied": hidePermission(); break;
+      case "question.asked": showQuestionDialog(p.requestId, p.question, p.choices || []); break;
+      case "question.replied": hideQuestion(); break;
       case "session.mode.switched": setPlan(p.mode === "plan"); break;
       case "session.queue.mode.set": { const s = $("queueMode"); if (s) s.value = p.mode; } break;
       case "reference.changed": rpc("reference.list", {}).then(r => references = r.payload.references || []).catch(() => {}); refreshIf("refs"); break;
@@ -360,6 +362,31 @@
   function respondPermission(decision) {
     if (!permRequestId) return;
     send("permission.respond", { requestId: permRequestId, decision });
+  }
+
+  let questionRequestId = null;
+  function showQuestionDialog(requestId, question, choices) {
+    questionRequestId = requestId;
+    $("questionText").textContent = question;
+    const box = $("questionChoices");
+    box.innerHTML = "";
+    $("questionAnswer").value = "";
+    if (choices && choices.length) {
+      choices.forEach(c => {
+        const btn = document.createElement("button");
+        btn.textContent = c;
+        btn.style.margin = "2px 4px";
+        btn.onclick = () => { $("questionAnswer").value = c; };
+        box.appendChild(btn);
+      });
+    }
+    $("questionModal").classList.remove("hidden");
+    $("questionAnswer").focus();
+  }
+  function hideQuestion() { $("questionModal").classList.add("hidden"); questionRequestId = null; }
+  function respondQuestion(answer) {
+    if (!questionRequestId) return;
+    send("question.respond", { requestId: questionRequestId, answer });
   }
 
   let historyEpoch = 0;
@@ -1148,6 +1175,9 @@
     $("permAlways").onclick = () => respondPermission("ALLOW_ALWAYS");
     $("permOnce").onclick = () => respondPermission("ALLOW_ONCE");
     $("permReject").onclick = () => respondPermission("REJECT");
+    $("questionSend").onclick = () => { respondQuestion($("questionAnswer").value || ""); };
+    $("questionSkip").onclick = () => { respondQuestion("（用户跳过）"); };
+    $("questionAnswer").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); respondQuestion($("questionAnswer").value || ""); } });
     // 模态点击空白关闭
     $("modal").addEventListener("click", (e) => { if (e.target === $("modal")) closeModal(); });
     $("permModal").addEventListener("click", (e) => { if (e.target === $("permModal")) hidePermission(); });

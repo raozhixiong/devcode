@@ -12,9 +12,11 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 看板工具（对齐 OpenClaw board.* 系列）。单类按 action 分发，注册 11 个独立工具：
- * board.list / board.read / board.create / board.move / board.update /
- * board.claim / board.release / board.complete / board.block / board.unblock / board.heartbeat
+ * 看板工具（对齐 OpenClaw board.* 系列）。单类按 action 分发，注册 12 个独立工具：
+ * board_list / board_read / board_create / board_move / board_update /
+ * board_claim / board_release / board_complete / board_block / board_unblock / board_heartbeat / board_decompose
+ *
+ * <p>LLM function name 使用下划线（board_list）而非点号（board.list），避免 API 校验失败。
  *
  * <p>写操作（claim/release/complete/block/unblock/heartbeat）校验持有者：
  * 卡片 claimOwner 必须等于当前 agentId，防止跨 agent 抢占。
@@ -30,7 +32,7 @@ public class WorkboardTool implements Tool {
         this.wb = wb;
     }
 
-    @Override public String id() { return "board." + action; }
+    @Override public String id() { return "board_" + action; }
 
     @Override public String description() {
         return switch (action) {
@@ -130,7 +132,7 @@ public class WorkboardTool implements Tool {
             case "unblock" -> doUnblock(args, ctx);
             case "heartbeat" -> doHeartbeat(args, ctx);
             case "decompose" -> doDecompose(args, ctx);
-            default -> ToolResult.of("board." + action, "{\"error\":\"unknown action\"}");
+            default -> ToolResult.of("board_" + action, "{\"error\":\"unknown action\"}");
         };
     }
 
@@ -142,13 +144,13 @@ public class WorkboardTool implements Tool {
         if (!agent.isEmpty()) cards = cards.stream().filter(c -> agent.equals(c.claimOwner())).toList();
         ArrayNode arr = OM.createArrayNode();
         for (var c : cards) arr.add(cardJson(c));
-        return ToolResult.of("board.list", OM.createObjectNode().put("boardId", boardId).set("cards", arr).toString());
+        return ToolResult.of("board_list", OM.createObjectNode().put("boardId", boardId).set("cards", arr).toString());
     }
 
     private ToolResult doRead(com.fasterxml.jackson.databind.JsonNode args) {
         String cardId = args.path("cardId").asText();
         var c = wb.getCard(cardId);
-        if (c.isEmpty()) return ToolResult.of("board.read", "{\"error\":\"NOT_FOUND\"}");
+        if (c.isEmpty()) return ToolResult.of("board_read", "{\"error\":\"NOT_FOUND\"}");
         ObjectNode o = cardJson(c.get());
         ArrayNode links = OM.createArrayNode(); for (var l : wb.listLinks(cardId)) links.add(OM.createObjectNode()
                 .put("id", l.id()).put("type", l.type().name()).put("targetCardId", l.targetCardId()).put("title", l.title()));
@@ -166,13 +168,13 @@ public class WorkboardTool implements Tool {
         o.set("comments", comments);
         o.set("proofs", proofs);
         o.set("diagnostics", diags);
-        return ToolResult.of("board.read", o.toString());
+        return ToolResult.of("board_read", o.toString());
     }
 
     private ToolResult doCreate(com.fasterxml.jackson.databind.JsonNode args) {
         String boardId = args.path("boardId").asText("main");
         String title = args.path("title").asText();
-        if (title.isEmpty()) return ToolResult.of("board.create", "{\"error\":\"title required\"}");
+        if (title.isEmpty()) return ToolResult.of("board_create", "{\"error\":\"title required\"}");
         var c = wb.createCard(boardId, title, args.path("description").asText(null),
                 parseStatus(args.path("status").asText("triage")),
                 parsePriority(args.path("priority").asText("normal")),
@@ -181,7 +183,7 @@ public class WorkboardTool implements Tool {
                 args.path("linkedSessionKey").asText(null),
                 args.path("labels").asText(null), null,
                 args.path("templateId").asText(null), args.path("sourceUrl").asText(null));
-        return ToolResult.of("board.create", cardJson(c).toString());
+        return ToolResult.of("board_create", cardJson(c).toString());
     }
 
     private ToolResult doMove(com.fasterxml.jackson.databind.JsonNode args) {
@@ -189,73 +191,73 @@ public class WorkboardTool implements Tool {
         var status = WorkboardStore.Status.valueOf(args.path("status").asText().toUpperCase());
         Double pos = args.has("position") ? args.path("position").asDouble() : null;
         wb.moveCard(cardId, status, pos);
-        return ToolResult.of("board.move", cardJson(wb.getCard(cardId).orElseThrow()).toString());
+        return ToolResult.of("board_move", cardJson(wb.getCard(cardId).orElseThrow()).toString());
     }
 
     private ToolResult doUpdate(com.fasterxml.jackson.databind.JsonNode args) {
         String cardId = args.path("cardId").asText();
         var c = wb.getCard(cardId);
-        if (c.isEmpty()) return ToolResult.of("board.update", "{\"error\":\"NOT_FOUND\"}");
+        if (c.isEmpty()) return ToolResult.of("board_update", "{\"error\":\"NOT_FOUND\"}");
         wb.updateCard(cardId,
                 args.has("title") ? args.path("title").asText() : c.get().title(),
                 args.has("description") ? args.path("description").asText() : c.get().description(),
                 args.has("priority") ? parsePriority(args.path("priority").asText()) : WorkboardStore.Priority.valueOf(c.get().priority().toUpperCase()),
                 args.has("labels") ? args.path("labels").asText() : c.get().labels(),
                 null);
-        return ToolResult.of("board.update", cardJson(wb.getCard(cardId).orElseThrow()).toString());
+        return ToolResult.of("board_update", cardJson(wb.getCard(cardId).orElseThrow()).toString());
     }
 
     private ToolResult doClaim(com.fasterxml.jackson.databind.JsonNode args, ToolContext ctx) {
         String cardId = args.path("cardId").asText();
         Long ttl = args.has("ttlMs") ? args.path("ttlMs").asLong() : null;
         var token = wb.claimCard(cardId, ctx.agentId(), ttl);
-        if (token.isEmpty()) return ToolResult.of("board.claim", "{\"claimed\":false,\"error\":\"已被认领或不存在\"}");
-        return ToolResult.of("board.claim", OM.createObjectNode().put("claimed", true).put("token", token.get())
+        if (token.isEmpty()) return ToolResult.of("board_claim", "{\"claimed\":false,\"error\":\"已被认领或不存在\"}");
+        return ToolResult.of("board_claim", OM.createObjectNode().put("claimed", true).put("token", token.get())
                 .put("cardId", cardId).put("owner", ctx.agentId()).toString());
     }
 
     private ToolResult doRelease(com.fasterxml.jackson.databind.JsonNode args, ToolContext ctx) {
         String cardId = args.path("cardId").asText();
-        if (!owns(cardId, ctx)) return ToolResult.of("board.release", "{\"ok\":false,\"error\":\"非持有者\"}");
+        if (!owns(cardId, ctx)) return ToolResult.of("board_release", "{\"ok\":false,\"error\":\"非持有者\"}");
         WorkboardStore.Status fb = args.path("fallback").asText().isEmpty() ? null : WorkboardStore.Status.valueOf(args.path("fallback").asText().toUpperCase());
         wb.releaseCard(cardId, fb);
-        return ToolResult.of("board.release", "{\"ok\":true}");
+        return ToolResult.of("board_release", "{\"ok\":true}");
     }
 
     private ToolResult doComplete(com.fasterxml.jackson.databind.JsonNode args, ToolContext ctx) {
         String cardId = args.path("cardId").asText();
-        if (!owns(cardId, ctx)) return ToolResult.of("board.complete", "{\"ok\":false,\"error\":\"非持有者\"}");
+        if (!owns(cardId, ctx)) return ToolResult.of("board_complete", "{\"ok\":false,\"error\":\"非持有者\"}");
         wb.completeCard(cardId, args.path("summary").asText(null));
-        return ToolResult.of("board.complete", "{\"ok\":true}");
+        return ToolResult.of("board_complete", "{\"ok\":true}");
     }
 
     private ToolResult doBlock(com.fasterxml.jackson.databind.JsonNode args, ToolContext ctx) {
         String cardId = args.path("cardId").asText();
-        if (!owns(cardId, ctx)) return ToolResult.of("board.block", "{\"ok\":false,\"error\":\"非持有者\"}");
+        if (!owns(cardId, ctx)) return ToolResult.of("board_block", "{\"ok\":false,\"error\":\"非持有者\"}");
         wb.blockCard(cardId, args.path("reason").asText(null));
-        return ToolResult.of("board.block", "{\"ok\":true}");
+        return ToolResult.of("board_block", "{\"ok\":true}");
     }
 
     private ToolResult doUnblock(com.fasterxml.jackson.databind.JsonNode args, ToolContext ctx) {
         wb.unblockCard(args.path("cardId").asText());
-        return ToolResult.of("board.unblock", "{\"ok\":true}");
+        return ToolResult.of("board_unblock", "{\"ok\":true}");
     }
 
     private ToolResult doHeartbeat(com.fasterxml.jackson.databind.JsonNode args, ToolContext ctx) {
         String cardId = args.path("cardId").asText();
         var c = wb.getCard(cardId);
-        if (c.isEmpty()) return ToolResult.of("board.heartbeat", "{\"ok\":false,\"error\":\"NOT_FOUND\"}");
+        if (c.isEmpty()) return ToolResult.of("board_heartbeat", "{\"ok\":false,\"error\":\"NOT_FOUND\"}");
         // 认领者本人或 token 匹配均可刷新
         boolean ok = (ctx.agentId().equals(c.get().claimOwner()))
                 || (!args.path("token").asText().isEmpty() && args.path("token").asText().equals(c.get().claimToken()));
-        if (!ok) return ToolResult.of("board.heartbeat", "{\"ok\":false,\"error\":\"非持有者\"}");
+        if (!ok) return ToolResult.of("board_heartbeat", "{\"ok\":false,\"error\":\"非持有者\"}");
         boolean refreshed = wb.heartbeatCard(cardId, c.get().claimToken() == null ? "" : c.get().claimToken());
-        return ToolResult.of("board.heartbeat", "{\"ok\":" + refreshed + "}");
+        return ToolResult.of("board_heartbeat", "{\"ok\":" + refreshed + "}");
     }
 
     private ToolResult doDecompose(com.fasterxml.jackson.databind.JsonNode args, ToolContext ctx) {
         String cardId = args.path("cardId").asText();
-        if (wb.getCard(cardId).isEmpty()) return ToolResult.of("board.decompose", "{\"ok\":false,\"error\":\"NOT_FOUND\"}");
+        if (wb.getCard(cardId).isEmpty()) return ToolResult.of("board_decompose", "{\"ok\":false,\"error\":\"NOT_FOUND\"}");
         java.util.List<String> items = new java.util.ArrayList<>();
         var arr = args.path("items");
         if (arr.isArray()) {
@@ -266,7 +268,7 @@ public class WorkboardTool implements Tool {
         var created = wb.decomposeCard(cardId, items);
         ArrayNode ids = OM.createArrayNode();
         created.forEach(c -> ids.add(c.id()));
-        return ToolResult.of("board.decompose",
+        return ToolResult.of("board_decompose",
                 OM.createObjectNode().put("ok", true).put("count", created.size()).set("children", ids).toString());
     }
 

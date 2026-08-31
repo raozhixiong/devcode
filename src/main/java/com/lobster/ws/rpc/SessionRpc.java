@@ -8,6 +8,7 @@ import com.lobster.agent.QueueMode;
 import com.lobster.event.Events;
 import com.lobster.event.LobsterEvent;
 import com.lobster.permission.PermissionEngine;
+import com.lobster.question.QuestionEngine;
 import com.lobster.rbac.AgentRegistry;
 import com.lobster.store.InboxStore;
 import com.lobster.store.MessageStore;
@@ -27,17 +28,20 @@ public class SessionRpc extends BaseRpc {
     private final AgentLoop loop;
     private final InboxStore inbox;
     private final PermissionEngine permissions;
+    private final QuestionEngine questionEngine;
     private final SessionOwnership ownership;
     private final SessionStateService stateService;
     private final AgentRegistry agents;
 
     public SessionRpc(MessageStore store, AgentLoop loop, InboxStore inbox,
-                      PermissionEngine permissions, SessionOwnership ownership,
+                      PermissionEngine permissions, QuestionEngine questionEngine,
+                      SessionOwnership ownership,
                       SessionStateService stateService, AgentRegistry agents) {
         this.store = store;
         this.loop = loop;
         this.inbox = inbox;
         this.permissions = permissions;
+        this.questionEngine = questionEngine;
         this.ownership = ownership;
         this.stateService = stateService;
         this.agents = agents;
@@ -47,7 +51,8 @@ public class SessionRpc extends BaseRpc {
     public Set<String> methods() {
         return Set.of("queue.mode.set", "mode.set", "sessions.archive", "sessions.rename",
                 "sessions.fork", "sessions.rewind", "sessions.assignOwner", "sessions.participants",
-                "sessions.state", "sessions.changesSince", "permission.respond", "sessions.list");
+                "sessions.state", "sessions.changesSince", "permission.respond", "question.respond",
+                "sessions.list");
     }
 
     @Override
@@ -65,6 +70,7 @@ public class SessionRpc extends BaseRpc {
             case "sessions.state" -> sessionState(id, params);
             case "sessions.changesSince" -> sessionChangesSince(id, params);
             case "permission.respond" -> permissionRespond(id, params);
+            case "question.respond" -> questionRespond(id, params);
             case "sessions.list" -> sessionsList(id);
         }
     }
@@ -174,6 +180,19 @@ public class SessionRpc extends BaseRpc {
         publish(new LobsterEvent(Events.PERMISSION_REPLIED, null,
                 on().put("requestId", requestId)
                         .put("decision", decision == null || decision.isEmpty() ? "REJECT" : decision), false));
+        sendRes(id, true, on().put("requestId", requestId));
+    }
+
+    private void questionRespond(String id, JsonNode params) {
+        String requestId = params.path("requestId").asText();
+        String answer = params.path("answer").asText();
+        if (requestId.isEmpty()) {
+            sendRes(id, false, on().put("code", "BAD_REQUEST").put("message", "requestId 必填"));
+            return;
+        }
+        questionEngine.reply(requestId, answer);
+        publish(new LobsterEvent(Events.QUESTION_REPLIED, null,
+                on().put("requestId", requestId).put("answer", answer), false));
         sendRes(id, true, on().put("requestId", requestId));
     }
 

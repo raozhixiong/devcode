@@ -156,7 +156,7 @@ public class DispatchService {
         active.add(sid);
         String prompt = "请完成看板卡片「" + title + "」" +
                 (c.description() != null ? "：" + c.description() : "") +
-                "。完成后必须调用 board.complete；若无法完成或需阻塞，调用 board.block。";
+                "。完成后必须调用 board_complete；若无法完成或需阻塞，调用 board_block。";
         store.appendUser(sid, List.of(new Part.Text(prompt, false, false)));
         log.info("dispatch 起 worker session={} card={}", sid, c.id());
         Thread.startVirtualThread(() -> {

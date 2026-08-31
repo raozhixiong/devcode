@@ -355,6 +355,17 @@ public class RuntimeConfig {
     }
 
     @Bean
+    public com.lobster.question.QuestionEngine questionEngine(EventBus bus) {
+        return new com.lobster.question.QuestionEngine(pq -> bus.publish(new com.lobster.event.LobsterEvent(
+                com.lobster.event.Events.QUESTION_ASKED, pq.sessionId(),
+                new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode()
+                        .put("requestId", pq.requestId())
+                        .put("question", pq.question())
+                        .set("choices", new com.fasterxml.jackson.databind.ObjectMapper()
+                                .valueToTree(pq.choices())), false)));
+    }
+
+    @Bean
     public com.lobster.store.InboxStore inboxStore(AgentDb mainAgentDb) {
         return new com.lobster.store.InboxStore(mainAgentDb);
     }
@@ -374,11 +385,12 @@ public class RuntimeConfig {
                                 com.lobster.tool.builtin.ReferenceTool referenceTool,
                                 com.lobster.tool.builtin.TtsTool ttsTool,
                                 com.lobster.store.WorkboardStore workboard,
-                                LlmProvider llm, String model) {
+                                LlmProvider llm, String model,
+                                com.lobster.question.QuestionEngine questionEngine) {
         var tools = ToolRegistry.of(
                 new ReadTool(), new WriteTool(), new EditTool(),
                 new GlobTool(), new GrepTool(), new BashTool(sandboxService),
-                new TodoTool(), new QuestionTool(), new ListTool());
+                new TodoTool(), new QuestionTool(questionEngine), new ListTool());
         // 看板工具（对齐 OpenClaw board.*）：12 个独立工具
         for (var a : new String[]{"list","read","create","move","update","claim","release","complete","block","unblock","heartbeat","decompose"})
             tools.register(new com.lobster.tool.builtin.WorkboardTool(a, workboard));

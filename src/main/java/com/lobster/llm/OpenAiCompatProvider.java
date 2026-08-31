@@ -63,8 +63,12 @@ public class OpenAiCompatProvider implements LlmProvider {
                 int deltaCount = 0;
                 int toolCallCount = 0;
                 while ((line = reader.readLine()) != null) {
-                    if (!line.startsWith("data:")) continue;
+                    if (!line.startsWith("data:")) {
+                        if (!line.isBlank()) log.debug("SSE non-data line: {}", truncate(line, 200));
+                        continue;
+                    }
                     String payload = line.substring(5).trim();
+                    log.debug("SSE data: {}", truncate(payload, 500));
                     if ("[DONE]".equals(payload)) break;
                     JsonNode root = OM.readTree(payload);
                     JsonNode choice = root.path("choices").path(0);
@@ -121,6 +125,7 @@ public class OpenAiCompatProvider implements LlmProvider {
         if (!req.tools().isEmpty()) {
             ArrayNode tools = OM.createArrayNode();
             for (ToolSpec t : req.tools()) {
+                log.debug("注册工具: {} (desc={})", t.name(), truncate(t.description(), 80));
                 ObjectNode fn = OM.createObjectNode();
                 fn.put("name", t.name());
                 fn.put("description", t.description());
@@ -132,6 +137,9 @@ public class OpenAiCompatProvider implements LlmProvider {
             }
             body.set("tools", tools);
         }
+
+        String bodyStr = OM.writeValueAsString(body);
+        log.debug("LLM 请求体: {}", truncate(bodyStr, 4000));
 
         return HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/chat/completions"))

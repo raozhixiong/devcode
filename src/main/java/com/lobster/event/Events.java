@@ -34,6 +34,8 @@ public final class Events {
     public static final String DEVICE_PAIR_RESOLVED = "device.pair.resolved";
     public static final String DEVICE_CHANGED = "device.changed";
     public static final String AUDIT_CHANGED = "audit.changed";
+    public static final String QUESTION_ASKED = "question.asked";
+    public static final String QUESTION_REPLIED = "question.replied";
     public static final String APPROVAL_REQUESTED = "approval.requested";
     public static final String APPROVAL_RESOLVED = "approval.resolved";
     public static final String CHANNEL_CHANGED = "channel.changed";
