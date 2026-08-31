@@ -1,9 +1,11 @@
 # 龙虾 AgentLoop vs OpenCode AgentLoop 细节差距分析
 
-> 生成时间：2026-08-29
+> 生成时间：2026-08-29（最后更新：2026-08-31）
 > 对比对象：龙虾 `AgentLoop.java`（M4）vs OpenCode `prompt.ts` / `processor.ts` / `retry.ts` / `compaction.ts` / `overflow.ts`
 > 参考实现路径：`D:\AIAgent\aicode\opencode-dev\packages\opencode\src\session\`
 > 结论：龙虾 AgentLoop 具备基础循环骨架（状态机、流式、工具执行、压缩、Plan 模式、子代理、中断），但相比 opencode 缺少 **23 项**生产级鲁棒性能力，其中 **7 项为高优先级**。
+>
+> **2026-08-31 更新**：23 个 GAP 本体仍未实现（见文末「八、实现进展追踪」），但周边已有三项落地：日志可观测性（logback + 全链路埋点）、看板自动调度引擎（AgentLoop 新增 12 个 board.* 工具 + worker 子会话复用同一 loop）、LlmProvider Bean 化（`RuntimeConfig.llmProvider/llmModel`，为 GAP-01/02/03 的 provider 层改造预留了注入点）。
 
 ---
 
@@ -63,7 +65,7 @@ HTTP 头尊重：
 
 重试期间通过 `processor.ts:660-674` 发布 `status: { type: "retry", attempt, message, action, next }` 事件，前端可展示"正在重试（第 N 次），X 秒后重试"。
 
-**龙虾现状**（`AgentLoop.java:355-360`）：
+**龙虾现状**（`AgentLoop.java:370-375`）：
 
 ```java
 case LlmEvent.Error e -> {
@@ -304,7 +306,7 @@ if (consumeAbort(sessionId)) {
    确保模型先看到摘要，再看最近上下文，最后看当前消息
 ```
 
-**龙虾现状**（`AgentLoop.java:247-279`）：
+**龙虾现状**（`AgentLoop.java:231-279`）：
 
 ```java
 private static final double COMPACTION_TRIGGER = 0.7;
@@ -773,3 +775,97 @@ private static String truncate(String s, int max) {
 | Plan 模式 reminder 注入 | `PlanMode.reminder()` | 在最后一条 user 消息尾部注入 system-reminder |
 
 这些是龙虾企业级多角色定位的差异化能力，opencode 作为个人编码工具不需要。
+
+---
+
+## 七、Gap 周边落地能力（2026-08-29 后）
+
+> 以下能力本身不直接闭合任一 GAP，但改变了 GAP 实现的入口、基础设施或优先级。每项标注对 GAP 的影响。
+
+### 7.1 日志可观测性（2026-08-31）
+
+- 新增 `logback-spring.xml`（控制台 + 文件双 appender，10MB/7 天滚动，200MB 上限）
+- `OpenAiCompatProvider` / `AgentLoop` / `EventBus` / `WsHandler` / `ChatRpc` / `PermissionEngine` 增加结构化日志
+
+**对 GAP 的影响**：
+
+| GAP | 影响 |
+|-----|------|
+| GAP-01 LLM 重试 | 重试事件可经日志观测（需配 `log.info("重试 attempt={}", attempt)`），但本体未实现 |
+| GAP-02 错误分类 | 错误日志已区分 HTTP 状态码，为分类实现提供诊断依据 |
+| GAP-05 Abort 信号 | abort 路径尚无日志，后续实现时需补 |
+
+### 7.2 LlmProvider Bean 化（2026-08-31）
+
+`RuntimeConfig` 新增 `llmProvider` / `llmModel` Bean，Mock 与 OpenAI 互切由配置控制，注入到 `AgentLoop` 构造函数。
+
+**对 GAP 的影响**：GAP-01/02/03/22 的 provider 层改造已有干净注入点，无需再改 AgentLoop 来接收新 provider。
+
+### 7.3 看板自动调度引擎（2026-08-31）
+
+- `DispatchService`：30s tick 扫描 READY 卡片，claim + spawn worker 子会话（复用 AgentLoop），max 3 并发
+- `LifecycleSyncService`：session idle/status 事件回写卡片；依赖级联（全部子卡完成→父卡自动完成）
+- `NotificationService`：卡片事件通知 + 企微/钉钉/飞书外发
+- AgentLoop 注册 12 个 `board.*` 工具
+
+**对 GAP 的影响**：
+
+| GAP | 影响 |
+|-----|------|
+| GAP-05 Abort 信号 | worker 子会话 abort 传播路径尚未实现（DispatchService 不监听 abort，GAP-05 仍需本体闭合） |
+| GAP-07 Runner 状态机 | DispatchService 的并发控制（max 3）与 Runner 状态机是正交的，不替代 GAP-07 |
+| GAP-11 子代理权限派生 | worker 子会话使用默认权限，未派生父会话 deny 规则（GAP-11 仍未闭合） |
+
+---
+
+## 八、实现进展追踪
+
+> 2026-08-31 建立。每次闭合任一 GAP 时，更新此表并在 PR description 中引用。
+
+| GAP | 标题 | 状态 | 闭合日期 | 闭合 Commit | 备注 |
+|-----|------|------|---------|-------------|------|
+| 01 | LLM 重试机制 | ❌ 未闭合 | — | — | Provider 层已 Bean 化，可接入 |
+| 02 | 错误分类体系 | ❌ 未闭合 | — | — | `OpenAiCompatProvider` 已区分 HTTP 状态码日志，但 LlmEvent 仍是单一 Error |
+| 03 | Reasoning 流支持 | ❌ 未闭合 | — | — | LlmEvent 无 ReasoningDelta |
+| 04 | 文件快照 & Revert | ❌ 未闭合 | — | — | — |
+| 05 | Abort 信号传播 | ❌ 未闭合 | — | — | worker 子会话场景新增需求，仍需递归取消 |
+| 06 | 精细上下文压缩 | ❌ 未闭合 | — | — | — |
+| 07 | Runner 状态机 | ❌ 未闭合 | — | — | — |
+| 08 | Max Steps 优雅降级 | ❌ 未闭合 | — | — | — |
+| 09 | 工具调用修复 | ❌ 未闭合 | — | — | — |
+| 10 | 权限回复选项 | ❌ 未闭合 | — | — | `PermissionEngine` 已加日志，本体无变化 |
+| 11 | 子代理权限派生 | ❌ 未闭合 | — | — | worker 子会话场景新增需求 |
+| 12 | 标题生成 | ❌ 未闭合 | — | — | — |
+| 13 | Structured Output | ❌ 未闭合 | — | — | — |
+| 14 | Content Filter 处理 | ❌ 未闭合 | — | — | — |
+| 15 | Token/成本追踪 | ❌ 未闭合 | — | — | — |
+| 16 | 后台任务提升 | ❌ 未闭合 | — | — | — |
+| 17 | 图片/附件处理 | ❌ 未闭合 | — | — | — |
+| 18 | LSP 诊断集成 | ❌ 未闭合 | — | — | — |
+| 19 | 自动格式化 | ❌ 未闭合 | — | — | — |
+| 20 | 工具输出截断到临时文件 | ❌ 未闭合 | — | — | — |
+| 21 | OpenTelemetry 追踪 | ❌ 未闭合 | — | — | — |
+| 22 | Provider 特定优化 | ❌ 未闭合 | — | — | Provider 已 Bean 化，特化逻辑有注入点 |
+| 23 | 指令文件去重 | ❌ 未闭合 | — | — | — |
+
+---
+
+## 九、补充说明：2026-08-31 行号漂移对照
+
+> 因代码演进，第二章引用的行号已偏移，以本表为准：
+
+| GAP | 文档引用 | 实际位置 | 变更原因 |
+|-----|---------|---------|---------|
+| GAP-01 `LlmEvent.Error e` | `AgentLoop.java:355-360` | `:370-375` | AgentLoop 新增 12 个 board 工具注册块（~20 行），下移 |
+| GAP-06 `autoCompact` | `AgentLoop.java:247-279` | `:249-279` | 文件头注释调整，几乎无偏移 |
+| GAP-09 工具调用修复 | `AgentLoop.java:419-424` | `:428-433` | 同上，board 工具块插入导致下移 |
+
+---
+
+## 十、M5 建议实施顺序（更新）
+
+> 原五章优先级不变。基于 2026-08-31 基础设施变更，调整如下：
+
+1. **GAP-02 错误分类 → GAP-01 重试**：先分类后重试，依赖链不变，但 Provider Bean 化使两步可独立 PR
+2. **GAP-05 Abort 信号**：worker 子会话场景（DispatchService）新增递归取消需求，建议与 GAP-11（子代理权限派生）合并实现
+3. **GAP-03 Reasoning 流**：依赖 provider 层改动最小，可作为独立 PR 快速落地
