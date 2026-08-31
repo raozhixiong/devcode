@@ -25,6 +25,7 @@ public class AgentLoop {
 
     private static final com.fasterxml.jackson.databind.ObjectMapper OM =
             new com.fasterxml.jackson.databind.ObjectMapper();
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AgentLoop.class);
 
     private final MessageStore store;
     private final EventBus bus;
@@ -130,14 +131,17 @@ public class AgentLoop {
 
     public void run(String sessionId) {
         if (!busySessions.add(sessionId)) {
+            log.info("run 已在运行，忽略重复请求 session={}", sessionId);
             return; // 已在运行，输入由 WsHandler 入队
         }
+        log.info("run 启动 session={} agent={} model={}", sessionId, agentId, model);
         // writer claim 围栏：会话写入权（被其他 run 持有则拒绝）
         com.lobster.store.WriterClaimStore.Claim claim = null;
         if (claims != null) {
             claim = claims.claim(sessionId, "run_" + sessionId);
             if (claim == null) {
                 busySessions.remove(sessionId);
+                log.warn("run 写入权被抢占，拒绝 session={}", sessionId);
                 throw new IllegalStateException("会话 " + sessionId + " 写入权被其他 run 持有");
             }
             activeClaims.put(sessionId, claim);
@@ -165,6 +169,7 @@ public class AgentLoop {
                     OM.createObjectNode(), false));
             publishStatus(sessionId, "idle");
             writeEpisodicMemory(sessionId);
+            log.info("run 结束 session={}", sessionId);
         }
     }
 
@@ -284,18 +289,21 @@ public class AgentLoop {
         java.util.Map<String, Integer> toolCallCounts = new java.util.HashMap<>();
         while (true) {
             if (consumeAbort(sessionId)) {
+                log.info("run 收到中断请求，终止 session={}", sessionId);
                 var asst = store.appendAssistant(sessionId);
                 store.addPart(asst.id(), new Part.Text(
                         "用户已中断（interrupt），回合终止。", true, false));
                 return;
             }
             if (!checkClaim(sessionId)) {
+                log.warn("run writer claim 被抢占，中止 session={}", sessionId);
                 var asst = store.appendAssistant(sessionId);
                 store.addPart(asst.id(), new Part.Text(
                         "writer claim 已被抢占，回合中止。", true, false));
                 return;
             }
             if (++step > MAX_STEPS) {
+                log.warn("run 达到最大步数 {}，终止 session={}", MAX_STEPS, sessionId);
                 var asst = store.appendAssistant(sessionId);
                 store.addPart(asst.id(), new Part.Text(
                         "达到最大步数限制（" + MAX_STEPS + "），回合终止。", true, false));
@@ -306,6 +314,8 @@ public class AgentLoop {
             // 溢出检测：估算 token 超阈值 -> 自动压缩（保留尾部）
             long limit = contextLimitHolder > 0 ? contextLimitHolder : contextLimit;
             if (TokenEstimator.estimate(history) > limit * COMPACTION_TRIGGER) {
+                log.info("run 触发自动压缩 session={} 估算tokens={} 阈值={}",
+                        sessionId, TokenEstimator.estimate(history), (long) (limit * COMPACTION_TRIGGER));
                 history = autoCompact(sessionId, history);
             }
 
@@ -313,6 +323,7 @@ public class AgentLoop {
             var last = history.isEmpty() ? null : history.get(history.size() - 1);
             if (last != null && "assistant".equals(last.role()) && last.parts().stream()
                     .noneMatch(p -> p instanceof Part.Tool)) {
+                log.info("run 纯文本回复，回合结束 session={} step={}", sessionId, step);
                 return; // 纯文本回复，回合结束
             }
 
@@ -320,6 +331,8 @@ public class AgentLoop {
             var assistant = store.appendAssistant(sessionId);
             bus.publish(new com.lobster.event.LobsterEvent(Events.STEP_STARTED, sessionId,
                     OM.createObjectNode().put("assistantMessageId", assistant.id()), true));
+            log.info("run step 开始 session={} step={} assistantMsg={} history={}",
+                    sessionId, step, assistant.id(), history.size());
 
             // 组装请求
             List<LlmProvider.ToolSpec> toolSpecs = toolSpecs();
@@ -333,27 +346,38 @@ public class AgentLoop {
             LlmEvent.Usage usage = new LlmEvent.Usage(0, 0);
             String finishReason = "stop";
             boolean errored = false;
+            int deltaCount = 0;
+            log.info("LLM 请求 session={} model={} tools={} msgs={}",
+                    sessionId, model, toolSpecs.size(), messages.size());
 
             for (LlmEvent event : (Iterable<LlmEvent>) llm.stream(
                     new LlmProvider.LlmRequest(model, system, messages, toolSpecs, 0.7))::iterator) {
                 switch (event) {
                     case LlmEvent.TextDelta d -> {
+                        deltaCount++;
                         textBuf.append(d.text());
                         bus.publish(new com.lobster.event.LobsterEvent(Events.TEXT_DELTA, sessionId,
                                 OM.createObjectNode().put("delta", d.text()), false));
                     }
-                    case LlmEvent.ToolCall c -> toolCalls.add(c);
+                    case LlmEvent.ToolCall c -> {
+                        toolCalls.add(c);
+                        log.info("LLM 返回工具调用 session={} tool={} callId={}", sessionId, c.name(), c.callId());
+                    }
                     case LlmEvent.Finish f -> {
                         finishReason = f.reason();
                         usage = f.usage();
                     }
                     case LlmEvent.Error e -> {
                         errored = true;
+                        log.error("LLM 流式返回错误 session={}", sessionId, e.cause());
                         store.addPart(assistant.id(), new Part.Text(
                                 "LLM 错误: " + e.cause().getMessage(), false, false));
                     }
                 }
             }
+            log.info("LLM 响应完成 session={} deltas={} toolCalls={} finish={} tokens(in/out)={}/{}",
+                    sessionId, deltaCount, toolCalls.size(), finishReason,
+                    usage.inputTokens(), usage.outputTokens());
             if (errored) return;
 
             if (!textBuf.isEmpty()) {
@@ -368,6 +392,7 @@ public class AgentLoop {
                 String key = call.name() + ":" + call.argumentsJson();
                 int count = toolCallCounts.merge(key, 1, Integer::sum);
                 if (count > DOOM_LOOP_THRESHOLD) {
+                    log.warn("run doom loop 熔断 session={} tool={} 重复={}次", sessionId, call.name(), count);
                     store.addPart(assistant.id(), new Part.Tool(call.name(), call.callId(),
                             new Part.ToolState.Error("doom loop 检测：同参数重复调用 " + count + " 次，已熔断")));
                     publishToolFailed(sessionId, call, "doom loop 熔断");
@@ -389,7 +414,10 @@ public class AgentLoop {
                             .put("tokensOutput", usage.outputTokens()), true));
 
             // 无工具调用 -> 回合结束
-            if (toolCalls.isEmpty()) return;
+            if (toolCalls.isEmpty()) {
+                log.info("run 无工具调用，回合结束 session={} step={}", sessionId, step);
+                return;
+            }
 
             // 工具结果作为 user 消息回填（tool part 形式挂在回填消息上）
             var resultMsg = store.appendUser(sessionId, List.of());
@@ -408,6 +436,7 @@ public class AgentLoop {
             var before = hookEngine.fire(Events.TOOL_BEFORE, agentId, sessionId,
                     "{\"tool\":\"" + call.name() + "\",\"callId\":\"" + call.callId() + "\"}");
             if (before.blocked()) {
+                log.info("工具被 hook 拦截 session={} tool={} callId={}", sessionId, call.name(), call.callId());
                 store.addPart(assistantMessageId, new Part.Tool(call.name(), call.callId(),
                         new Part.ToolState.Error("被 hook 拦截: " + call.name())));
                 publishToolFailed(sessionId, call, "hook 拦截");
@@ -416,6 +445,7 @@ public class AgentLoop {
         }
         // Plan 模式权限裁剪：写/执行类工具禁用（write 例外：仅 plans/*.md）
         if (planMode.isToolDenied(sessionId, call.name())) {
+            log.info("Plan 模式裁剪工具 session={} tool={}", sessionId, call.name());
             store.addPart(assistantMessageId, new Part.Tool(call.name(), call.callId(),
                     new Part.ToolState.Error("Plan 模式：工具 " + call.name() + " 已被裁剪禁用")));
             publishToolFailed(sessionId, call, "Plan 模式裁剪");
@@ -434,6 +464,7 @@ public class AgentLoop {
 
         Tool tool = tools.get(call.name());
         if (tool == null || !toolAllowed(call.name())) {
+            log.warn("未知工具或角色无权限 session={} tool={}", sessionId, call.name());
             store.addPart(assistantMessageId, new Part.Tool(call.name(), call.callId(),
                     new Part.ToolState.Error("未知工具或角色无权限: " + call.name())));
             publishToolFailed(sessionId, call, "未知工具/角色无权限");
@@ -442,10 +473,13 @@ public class AgentLoop {
 
         // 权限：pattern 取工具名与首个参数值（M1 简化）
         String firstArg = firstArgValue(call);
+        log.info("工具权限校验 session={} tool={} pattern={}", sessionId, call.name(),
+                call.name() + ":" + (firstArg == null ? "*" : firstArg));
         PermissionReply reply = permissions.ask(call.name(),
                 List.of(call.name() + ":" + (firstArg == null ? "*" : firstArg), firstArg == null ? "*" : firstArg),
                 sessionId);
         if (!reply.allowed()) {
+            log.warn("工具权限拒绝 session={} tool={} feedback={}", sessionId, call.name(), reply.feedback());
             store.addPart(assistantMessageId, new Part.Tool(call.name(), call.callId(),
                     new Part.ToolState.Error("权限拒绝: " + reply.feedback())));
             publishToolFailed(sessionId, call, "权限拒绝");
@@ -456,12 +490,16 @@ public class AgentLoop {
                 new Part.ToolState.Running(call.name(), null)));
         bus.publish(new com.lobster.event.LobsterEvent(Events.TOOL_CALLED, sessionId,
                 OM.createObjectNode().put("callID", call.callId()).put("tool", call.name()), true));
+        log.info("工具执行开始 session={} tool={} callId={} argsLen={}",
+                sessionId, call.name(), call.callId(), call.argumentsJson().length());
 
         try {
             JsonNode args = OM.readTree(call.argumentsJson().isEmpty() ? "{}" : call.argumentsJson());
             var result = tool.execute(args, new ToolContext(
                     sessionId, assistantMessageId, agentId,
                     () -> {}, m -> {}, null));
+            log.info("工具执行成功 session={} tool={} callId={} title={} outputLen={}",
+                    sessionId, call.name(), call.callId(), result.title(), result.output().length());
             store.updateToolState(assistantMessageId, call.callId(),
                     new Part.ToolState.Completed(result.title(), result.output(), null));
             bus.publish(new com.lobster.event.LobsterEvent(Events.TOOL_SUCCESS, sessionId,
@@ -472,6 +510,7 @@ public class AgentLoop {
             fireToolAfterHooks(sessionId, call, "success");
         } catch (Exception e) {
             String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            log.error("工具执行异常 session={} tool={} callId={}", sessionId, call.name(), call.callId(), e);
             store.updateToolState(assistantMessageId, call.callId(),
                     new Part.ToolState.Error(msg));
             publishToolFailed(sessionId, call, msg);

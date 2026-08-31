@@ -25,6 +25,7 @@ public class ChatRpc extends BaseRpc {
     private final AgentLoop loop;
     private final InboxStore inbox;
     private final CommandExecutor commandExecutor;
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ChatRpc.class);
 
     public ChatRpc(MessageStore store, AgentLoop loop, InboxStore inbox, CommandExecutor commandExecutor) {
         this.store = store;
@@ -46,22 +47,27 @@ public class ChatRpc extends BaseRpc {
     private void chatSend(String id, JsonNode params) {
         String sessionKey = params.path("sessionKey").asText("main");
         String text = params.path("text").asText();
+        log.info("chat.send 收到 sessionKey={} textLen={} textHead={}", sessionKey, text.length(),
+                text.length() > 80 ? text.substring(0, 80) + "..." : text);
         if (text.startsWith("/")) {
             var s = store.findByKey(sessionKey)
                     .orElseGet(() -> store.createSession(sessionKey, "main", System.getProperty("user.dir")));
             var r = commandExecutor.execute(text, s.id());
+            log.info("chat.send 斜杠命令执行 ok={} outputLen={}", r.ok(), r.output() == null ? 0 : r.output().length());
             sendRes(id, r.ok(), on().put("status", r.ok() ? "done" : "error").put("output", r.output()));
             return;
         }
         var existing = store.findByKey(sessionKey);
         var s = existing.orElseGet(() -> store.createSession(sessionKey, "main", System.getProperty("user.dir")));
         if (loop.isBusy(s.id())) {
+            log.info("chat.send 会话繁忙，进入队列分流 session={}", s.id());
             var disp = loop.queueMode().dispatch(s.id(), true,
                     ignore -> inbox.enqueue(s.id(), text),
                     () -> loop.requestAbort(s.id()));
             publish(new LobsterEvent("session.input.queued", s.id(),
                     on().put("text", text).put("mode", disp.mode().name().toLowerCase()).put("note", disp.note()), false));
         } else {
+            log.info("chat.send 直接触发 agent run session={}", s.id());
             store.appendUser(s.id(), List.of(new Part.Text(text, false, false)));
             publish(new LobsterEvent(Events.PROMPT_ADMITTED, s.id(), on().put("text", text), true));
             Thread.ofVirtual().name("agent-loop-" + s.id()).start(() -> loop.run(s.id()));

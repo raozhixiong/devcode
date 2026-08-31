@@ -128,11 +128,19 @@
     <div class="view-head">
       <h3>工作看板</h3>
       <div>
+        <button class="ghost sm" id="boardDispatch">⚡ 派发 Ready</button>
+        <button class="ghost sm" id="boardDiagBtn">⚠ 诊断</button>
         <button class="ghost sm" id="boardAdd">+ 新建卡片</button>
         <button class="ghost sm" id="boardRefresh">刷新</button>
+        <span id="boardWorkers" class="board-workers"></span>
+        <button class="ghost sm" id="notifBtn">🔔<span id="notifBadge" class="badge hidden">0</span></button>
+        <div id="notifPanel" class="notif-panel hidden"></div>
       </div>
     </div>
+    <div id="boardTabs" class="board-tabs"></div>
+    <div id="boardDiag" class="board-diag hidden"></div>
     <div id="board" class="board"></div>
+    <aside id="boardDrawer" class="board-drawer hidden"></aside>
   </section>
 
   <!-- 任务视图 -->

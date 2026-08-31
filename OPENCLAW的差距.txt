@@ -1,0 +1,305 @@
+# 龙虾 vs OpenClaw 看板差距分析
+
+> 生成时间：2026-08-29
+> 对比对象：龙虾 WorkboardStore/WorkboardRpc（M4）vs OpenClaw Workboard Plugin
+> 结论：龙虾看板目前是**纯人工看板**，OpenClaw 看板是 **agent 自主任务调度引擎**，差距巨大。
+
+---
+
+## 一、总体对比
+
+| 维度 | 龙虾（当前） | OpenClaw |
+|------|-------------|----------|
+| 定位 | 人工 Kanban 看板 | agent 自主任务调度引擎 |
+| Agent 工具数 | **0 个** | **20+ 个** |
+| 自动建卡 | ❌ 只能人工 | ✅ agent 自建 + 拆分 |
+| 自动派发 | ❌ 无 | ✅ dispatch 启动 subagent |
+| 依赖链 | ❌ 无 | ✅ 父子卡自动联动 |
+| Claim 机制 | ❌ 无 | ✅ token 独占执行权 |
+| 会话联动 | ❌ 无 | ✅ lifecycle-sync 自动状态同步 |
+| 心跳续命 | ❌ 无 | ✅ heartbeat 防止 stale |
+| Proof/Artifact | ❌ 无 | ✅ 附在卡片上 |
+| 多看板 | ❌ 只有 "main" | ✅ 多 board + 元数据 |
+| 通知订阅 | ❌ 无 | ✅ subscribe/notify |
+| 附件存储 | ❌ 无 | ✅ attachment 读写 |
+| 评论 | ❌ 无 | ✅ comment |
+| 运行历史 | ❌ 无 | ✅ attempts 表 |
+| 诊断 | ❌ 无 | ✅ stranded/stale/failure 检测 |
+
+---
+
+## 二、数据库 Schema 差距
+
+### 龙虾现有表（2 张）
+
+```
+workboard_card    -- 卡片主表（19 列）
+workboard_event   -- 事件历史（5 列）
+```
+
+### OpenClaw 表（15 张）
+
+```
+workboard_boards              -- 看板元数据（多看板）
+workboard_cards               -- 卡片主表（含 claim/execution/stale/failure 字段）
+workboard_card_labels         -- 标签（多对多）
+workboard_card_events         -- 生命周期事件
+workboard_card_attempts       -- 运行历史（engine/model/session/status/error）
+workboard_card_comments       -- 评论
+workboard_card_links          -- 依赖链（parent/child/blocks/blocked_by/relates_to）
+workboard_card_proof          -- 证明记录（status/label/command/url/note）
+workboard_card_artifacts      -- 产物引用
+workboard_card_diagnostics    -- 诊断（stranded_ready/running_without_heartbeat 等）
+workboard_card_notifications  -- 通知记录
+workboard_worker_logs         -- Worker 日志
+workboard_worker_protocol    -- Worker 协议状态（idle/running/completed/blocked/violated）
+workboard_card_attachments   -- 附件元数据
+workboard_attachment_blobs   -- 附件二进制
+workboard_notification_subscriptions -- 通知订阅
+```
+
+### 需新增的表（13 张）
+
+| 表 | 用途 | 优先级 |
+|----|------|--------|
+| `workboard_board` | 多看板元数据 | P1 |
+| `workboard_card_link` | 父子依赖链 | P0 |
+| `workboard_card_attempt` | 运行历史 | P1 |
+| `workboard_card_comment` | 评论 | P2 |
+| `workboard_card_proof` | 测试/检查证明 | P1 |
+| `workboard_card_artifact` | 产物引用 | P2 |
+| `workboard_card_diagnostic` | 诊断信息 | P1 |
+| `workboard_card_attachment` | 附件 | P3 |
+| `workboard_attachment_blob` | 附件内容 | P3 |
+| `workboard_worker_log` | Worker 日志 | P1 |
+| `workboard_worker_protocol` | Worker 协议状态 | P1 |
+| `workboard_notification` | 通知记录 | P3 |
+| `workboard_notification_subscription` | 通知订阅 | P3 |
+
+### 需给 workboard_card 新增的列
+
+| 列 | 类型 | 用途 |
+|----|------|------|
+| `claim_token` | TEXT | Claim 独占令牌 |
+| `claim_expires_at` | INTEGER | Claim 过期时间 |
+| `scheduled_at` | INTEGER | 定时执行时间 |
+| `idempotency_key` | TEXT | 幂等键 |
+| `runtime_limit_ms` | INTEGER | 运行时限 |
+| `retry_budget` | INTEGER | 重试预算 |
+| `failure_count` | INTEGER DEFAULT 0 | 失败计数 |
+| `stale_json` | TEXT | stale 诊断 JSON |
+| `execution_status` | TEXT | 执行状态（idle/running/review/blocked） |
+| `worker_session_key` | TEXT | Worker 会话键 |
+| `worker_run_id` | TEXT | Worker 运行 ID |
+| `orchestration` | INTEGER DEFAULT 0 | 是否编排卡 |
+
+---
+
+## 三、Agent 工具差距（核心）
+
+### 龙虾现有看板工具：0 个
+
+Agent **无法** 通过任何工具操作看板。所有操作只能通过 WS RPC 由人工在浏览器执行。
+
+### OpenClaw 看板工具：20+ 个
+
+#### P0 — 基础 CRUD（agent 能建卡、读卡、移卡）
+
+| 工具 | 功能 | 龙虾对应 |
+|------|------|----------|
+| `board.list` | 列出卡片（支持 board/status/agent 过滤） | WS RPC `workboard.cards.list` 有，但无 agent 工具 |
+| `board.read` | 读取单卡 + 上下文（notes/attempts/comments/proof） | WS RPC 无，无 agent 工具 |
+| `board.create` | 建卡（含 parent/tenant/skills/workspace/idempotency） | WS RPC `workboard.cards.create` 有，但无 agent 工具 |
+| `board.move` | 移动卡片状态 | WS RPC `workboard.cards.move` 有，但无 agent 工具 |
+| `board.update` | 更新卡片字段 | WS RPC `workboard.cards.update` 有，但无 agent 工具 |
+
+#### P0 — Claim 机制（独占执行权）
+
+| 工具 | 功能 | 龙虾对应 |
+|------|------|----------|
+| `board.claim` | 领取卡片，返回 claim token，状态变 running | ❌ 无 |
+| `board.heartbeat` | 刷新 claim 心跳，防止 stale 判定 | ❌ 无 |
+| `board.release` | 释放 claim（暂停/交接/完成） | ❌ 无 |
+| `board.complete` | 完成卡（附 summary/proof/artifact） | ❌ 无 |
+| `board.block` | 阻塞卡（附原因），释放 claim | ❌ 无 |
+| `board.unblock` | 解除阻塞，回到 todo | ❌ 无 |
+
+#### P1 — 依赖编排（父子卡联动）
+
+| 工具 | 功能 | 龙虾对应 |
+|------|------|----------|
+| `board.link` | 父→子链接，子卡 todo 直到父卡 done 才提升为 ready | ❌ 无 |
+| `board.decompose` | 父卡拆分为多个子卡，自动建依赖链 | ❌ 无 |
+| `board.specify` | triage/backlog → todo（明确化） | ❌ 无 |
+| `board.dispatch` | 提升依赖就绪卡 + 清理 stale claim（不启动 worker） | ❌ 无 |
+
+#### P1 — Dispatch 派发（自动启动 subagent）
+
+| 功能 | 说明 | 龙虾对应 |
+|------|------|----------|
+| Dispatch 循环 | 扫描 ready 卡 → claim → 启动 subagent session → 状态变 running | ❌ 完全没有 |
+| 确定性 session key | `agent:<id>:subagent:workboard-<board>-<card>` | ❌ 无 |
+| 批量限制 | 默认最多 3 个并发 worker | ❌ 无 |
+| Worker 协议 | 必须调 complete/block，否则 protocol_violation → 自动 block | ❌ 无 |
+
+#### P1 — 会话联动（lifecycle-sync）
+
+| 会话状态 | OpenClaw 自动操作 | 龙虾 |
+|----------|------------------|------|
+| active | 卡片 → running | ❌ 无联动 |
+| completed | 卡片 → review | ❌ 无联动 |
+| failed/killed/timeout | 卡片 → blocked | ❌ 无联动 |
+| idle 30min | 标记 stale | ❌ 无联动 |
+
+#### P2 — 协作辅助
+
+| 工具 | 功能 | 龙虾对应 |
+|------|------|----------|
+| `board.comment` | 卡片评论 | ❌ 无 |
+| `board.proof` | 附测试/检查证明 | ❌ 无 |
+| `board.attachment_add/read/delete` | 附件读写 | ❌ 无 |
+| `board.worker_log` | Worker 日志 | ❌ 无 |
+| `board.runs` | 运行历史 | ❌ 无 |
+| `board.boards` | 多看板列表 | ❌ 无 |
+| `board.stats` | 看板统计 | ❌ 无 |
+
+#### P3 — 恢复与通知
+
+| 工具 | 功能 | 龙虾对应 |
+|------|------|----------|
+| `board.promote` | 强制提升 stale/blocked 卡（不需要 claim token） | ❌ 无 |
+| `board.reassign` | 重新指派 agent | ❌ 无 |
+| `board.reclaim` | 重新领取被抢占的卡 | ❌ 无 |
+| `board.notify_subscribe/list/events/advance/unsubscribe` | 通知订阅 | ❌ 无 |
+
+---
+
+## 四、RPC 差距
+
+### 龙虾现有 RPC（6 个）
+
+```
+workboard.cards.list     -- 列出卡片
+workboard.cards.create   -- 创建卡片
+workboard.cards.update   -- 更新卡片
+workboard.cards.move     -- 移动卡片
+workboard.cards.delete   -- 删除卡片
+workboard.cards.events   -- 事件历史
+```
+
+### 需新增的 RPC（按优先级）
+
+| RPC | 功能 | 优先级 |
+|-----|------|--------|
+| `workboard.cards.claim` | 领取卡片 + claim token | P0 |
+| `workboard.cards.release` | 释放 claim | P0 |
+| `workboard.cards.complete` | 完成卡片 | P0 |
+| `workboard.cards.block` | 阻塞卡片 | P0 |
+| `workboard.cards.unblock` | 解除阻塞 | P0 |
+| `workboard.cards.heartbeat` | 心跳续命 | P0 |
+| `workboard.cards.link` | 父子链接 | P1 |
+| `workboard.cards.decompose` | 拆分 | P1 |
+| `workboard.cards.specify` | 明确化 | P1 |
+| `workboard.cards.dispatch` | 派发 | P1 |
+| `workboard.cards.comment` | 评论 | P2 |
+| `workboard.cards.proof` | 证明 | P2 |
+| `workboard.cards.read` | 读取详情（含上下文） | P1 |
+| `workboard.cards.runs` | 运行历史 | P2 |
+| `workboard.boards.list` | 多看板 | P2 |
+| `workboard.boards.create` | 建看板 | P2 |
+| `workboard.boards.archive` | 归档看板 | P3 |
+| `workboard.boards.stats` | 统计 | P2 |
+
+---
+
+## 五、前端差距
+
+### 龙虾现有前端
+
+```
+- 看板视图（9 列静态渲染）
+- "+ 新建卡片" 按钮（prompt 弹窗输入）
+- "刷新" 按钮
+- 卡片无拖拽
+- 无 claim/heartbeat/complete 交互
+- 无 dispatch 状态展示
+- 无 worker session 链接
+- 无诊断面板
+```
+
+### 需补的前端功能
+
+| 功能 | 优先级 |
+|------|--------|
+| 卡片拖拽（列间移动） | P0 |
+| 卡片详情面板（notes/comments/proof/attempts） | P1 |
+| Claim 状态展示（谁在执行 + 心跳时间） | P1 |
+| Worker session 链接（点击跳到对话） | P1 |
+| 依赖链可视化（父子卡树形） | P2 |
+| 诊断面板（stranded/stale/failure 高亮） | P2 |
+| 多看板切换 | P2 |
+| Dispatch 日志面板 | P2 |
+
+---
+
+## 六、实现优先级建议
+
+### Phase 1（P0）：Agent 能操作看板
+
+**目标**：让 agent 通过工具建卡、领卡、完成卡，看板不再是纯人工。
+
+```
+1. 新增 WorkboardTool（board.list/read/create/move/update/claim/release/complete/block/unblock/heartbeat）
+2. WorkboardStore 补充 claim_token/claim_expires_at/failure_count/execution_status 列
+3. AgentLoop 注册 WorkboardTool
+4. 前端补卡片拖拽
+```
+
+### Phase 2（P1）：依赖编排 + 自动派发
+
+**目标**：agent 能拆分任务、自动启动 subagent 执行。
+
+```
+1. 新增 workboard_card_link 表 + board.link/decompose 工具
+2. 新增 DispatchService（扫描 ready → claim → 启动 subagent）
+3. 新增 LifecycleSyncService（会话状态 → 卡片状态自动同步）
+4. 新增 workboard_card_attempt 表 + board.runs 工具
+5. Worker 协议（subagent 必须调 complete/block）
+```
+
+### Phase 3（P2）：协作增强
+
+**目标**：多角色基于看板协作。
+
+```
+1. board.comment/proof 工具
+2. 多看板支持
+3. 前端卡片详情面板 + 依赖链可视化
+4. 诊断面板
+```
+
+### Phase 4（P3）：恢复与通知
+
+**目标**：容错与通知。
+
+```
+1. board.promote/reassign/reclaim 恢复工具
+2. 通知订阅
+3. 附件存储
+```
+
+---
+
+## 七、代码量估算
+
+| 模块 | 新增文件 | 新增代码行 | 优先级 |
+|------|---------|-----------|--------|
+| WorkboardTool（agent 工具） | 1 | ~400 | P0 |
+| WorkboardStore 扩展 | 0（改） | ~300 | P0 |
+| DB Migration（新增列 + 新表） | 1 | ~120 | P0-P1 |
+| DispatchService | 1 | ~200 | P1 |
+| LifecycleSyncService | 1 | ~150 | P1 |
+| WorkboardRpc 扩展 | 0（改） | ~300 | P0-P2 |
+| 前端看板改造 | 0（改） | ~500 | P0-P2 |
+| 测试 | 2 | ~400 | P0-P1 |
+| **合计** | **5 新文件** | **~2370** | |

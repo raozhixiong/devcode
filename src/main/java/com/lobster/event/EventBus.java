@@ -17,6 +17,7 @@ import java.util.function.Consumer;
 public class EventBus {
 
     private static final ObjectMapper OM = new ObjectMapper();
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(EventBus.class);
 
     private final JdbcTemplate jdbc;
     private final Map<String, CopyOnWriteArrayList<Consumer<LobsterEvent>>> aggregateListeners =
@@ -39,9 +40,12 @@ public class EventBus {
                         Ulid.next("evt_"), event.aggregateId(), seq, event.type(),
                         OM.writeValueAsString(event.data()), System.currentTimeMillis());
             } catch (Exception e) {
+                log.error("durable 事件落库失败 type={} aggregate={}", event.type(), event.aggregateId(), e);
                 throw new IllegalStateException("durable 事件落库失败: " + event.type(), e);
             }
         }
+        log.debug("事件发布 type={} aggregate={} durable={} seq={}",
+                event.type(), event.aggregateId(), event.durable(), out.seq());
         broadcast(out);
         return out;
     }

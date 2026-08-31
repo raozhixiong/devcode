@@ -71,6 +71,20 @@ public class ChannelReplyService {
         }
     }
 
+    /** 主动向某频道绑定推送文本（通知外部分发用）。无配置/失败静默。 */
+    public void sendToChannel(String channel, String accountId, String text) {
+        if (text == null || text.isBlank()) return;
+        var binding = channelStore.get(channel, accountId);
+        if (binding.isEmpty()) return;
+        String url = parseOutbound(binding.get().config());
+        if (url.isEmpty()) return;
+        try {
+            post(channel, url, text);
+        } catch (Exception ex) {
+            log.warn("频道通知外发失败 {}/{}: {}", channel, accountId, ex.getMessage());
+        }
+    }
+
     private void post(String channel, String url, String text) throws Exception {
         ObjectNode body = switch (channel) {
             case "wecom" -> OM.createObjectNode().put("msgtype", "text")

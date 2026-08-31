@@ -15,7 +15,7 @@
     kids.flat().forEach(c => { if (c == null) return; e.appendChild(typeof c === "string" ? document.createTextNode(c) : c); });
     return e;
   };
-  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
   /* ---------- 状态 ---------- */
   let ws = null, busy = false, streamingText = null, authed = false;
@@ -36,28 +36,41 @@
   function connect() {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     ws = new WebSocket(proto + "//" + location.host + "/ws");
-    ws.onopen = () => { setConnected(true); rpc("connect", { token: localStorage.getItem("lobster_token") || "" }).catch(() => {}); };
-    ws.onclose = () => { setConnected(false); authed = false; setTimeout(connect, 2000); };
+    ws.onopen = () => { retryDelay = 1000; setConnected(true); rpc("connect", { token: localStorage.getItem("lobster_token") || "" }).catch(() => {}); };
+    ws.onclose = () => { setConnected(false); authed = false; rejectAllPending({ code: "NO_CONN", message: "连接已断开" }); setTimeout(connect, retryDelay); retryDelay = Math.min(retryDelay * 2, 15000); };
+    ws.onerror = () => { try { ws.close(); } catch (_) {} };
     ws.onmessage = (e) => { try { handleFrame(JSON.parse(e.data)); } catch (_) {} };
   }
+  let retryDelay = 1000;
   let seq = 0;
   const nextId = () => "c-" + (++seq);
+  const RPC_TIMEOUT_MS = 30000;
   function send(method, params) { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "req", id: nextId(), method, params })); }
+  const pendingRpc = new Map(); // id -> {resolve, reject, timer}
   function rpc(method, params) {
     return new Promise((resolve, reject) => {
       if (!ws || ws.readyState !== 1) { reject(new Error("no-ws")); return; }
-      const id = nextId();
-      const h2 = (e) => {
-        let f; try { f = JSON.parse(e.data); } catch (_) { return; }
-        if (f.type === "res" && f.id === id) { ws.removeEventListener("message", h2);
-          if (f.ok) resolve(f); else reject(f.error || { code: "ERR", message: "rpc failed" }); }
-      };
-      ws.addEventListener("message", h2);
-      ws.send(JSON.stringify({ type: "req", id, method, params: params || {} }));
+      const sock = ws, id = nextId();
+      const timer = setTimeout(() => {
+        if (pendingRpc.delete(id)) reject({ code: "TIMEOUT", message: method + " 超时" });
+      }, RPC_TIMEOUT_MS);
+      pendingRpc.set(id, { resolve, reject, timer, sock });
+      sock.send(JSON.stringify({ type: "req", id, method, params: params || {} }));
     });
   }
+  function dispatchRes(frame) {
+    const p = pendingRpc.get(frame.id);
+    if (!p) return;
+    pendingRpc.delete(frame.id);
+    clearTimeout(p.timer);
+    if (frame.ok) p.resolve(frame); else p.reject(frame.error || { code: "ERR", message: "rpc failed" });
+  }
+  function rejectAllPending(reason) {
+    pendingRpc.forEach(p => { clearTimeout(p.timer); p.reject(reason); });
+    pendingRpc.clear();
+  }
   function handleFrame(frame) {
-    if (frame.type === "res") return handleRes(frame);
+    if (frame.type === "res") { dispatchRes(frame); return handleRes(frame); }
     if (frame.type === "event") return handleEvent(frame);
   }
   function handleRes(frame) {
@@ -82,9 +95,9 @@
         streamingText.el.textContent += p.delta; scroll(); break;
       case "session.next.text.ended": streamingText = null; break;
       case "session.next.tool.called":
-        streamingText = null; toolCard(p.tool, { running: true }); scroll(); break;
-      case "session.next.tool.success": toolCard(p.title || p.tool, { output: p.output }); scroll(); break;
-      case "session.next.tool.failed": toolCard(p.tool, { error: p.error }); scroll(); break;
+        streamingText = null; toolCardRunning(p.callID, p.tool); scroll(); break;
+      case "session.next.tool.success": toolCardDone(p.callID, p.title || p.tool, { output: p.output }); scroll(); break;
+      case "session.next.tool.failed": toolCardDone(p.callID, p.tool, { error: p.error }); scroll(); break;
       case "session.idle":
       case "session.status":
         if (ev.event === "session.status" && p.type !== "idle") break;
@@ -101,7 +114,8 @@
       case "artifact.changed": refreshIf("arts"); break;
       case "hooks.changed": refreshIf("hooks"); break;
       case "skills.changed": refreshIf("skills"); break;
-      case "workboard.changed": if (curView === "board") loadBoard(); break;
+      case "workboard.changed": if (curView === "board") scheduleBoardRefresh(); break;
+      case "workboard.notification": bumpNotif(p.message || "看板通知"); if (!$("notifPanel").classList.contains("hidden")) loadNotifications(); break;
       case "tasks.changed": if (curView === "tasks") loadTasks(); break;
       case "cron.changed": if (curView === "cron") loadCron(); break;
       case "approval.requested": case "approval.resolved": refreshIf("approvals"); break;
@@ -132,15 +146,22 @@
   }
 
   /* ---------- 工具 ---------- */
-  function toast(msg) {
-    const t = $("toast"); t.textContent = msg; t.classList.remove("hidden");
+  function toast(msg, kind) {
+    const t = $("toast"); t.textContent = msg;
+    t.classList.remove("hidden", "err");
+    if (kind === "err") t.classList.add("err");
     clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add("hidden"), 2600);
   }
   function bubble(cls, text) {
     const el = h("div", { class: "msg " + cls, text: text || "" });
-    $("messages").appendChild(el); return { el };
+    $("messages").appendChild(el); trimMessages(); return { el };
   }
-  function sys(text) { $("messages").appendChild(h("div", { class: "msg sys", text: text })); scroll(); }
+  const MAX_MSG_NODES = 500;
+  function trimMessages() {
+    const m = $("messages");
+    while (m.children.length > MAX_MSG_NODES) m.removeChild(m.firstChild);
+  }
+  function sys(text) { $("messages").appendChild(h("div", { class: "msg sys", text: text })); trimMessages(); scroll(); }
   function scroll() { const m = $("messages"); m.scrollTop = m.scrollHeight; }
   function setBusy(b) {
     busy = b; $("send").disabled = b; $("input").disabled = b;
@@ -181,7 +202,7 @@
   }
   function refreshActiveView() {
     if (!authed) return;
-    if (curView === "board") loadBoard();
+    if (curView === "board") { loadBoards(); loadBoard(); }
     else if (curView === "tasks") loadTasks();
     else if (curView === "cron") loadCron();
     else if (curView === "memory") { loadMemRecent(); loadMemCurated(); }
@@ -242,10 +263,23 @@
   }
   async function rewindSession(k) {
     k = k || currentSession;
-    try { const r = await rpc("chat.history", { sessionKey: k }); const msgs = (r.payload && r.payload.messages) || [];
-      const upTo = msgs.length ? msgs[0].id : null;
-      await rpc("sessions.rewind", { sessionKey: k, upToMessageId: upTo }); loadHistory(k); toast("已回滚"); }
-    catch (e) { toast("回滚失败: " + (e.message || e)); }
+    let msgs = [];
+    try { const r = await rpc("chat.history", { sessionKey: k }); msgs = (r.payload && r.payload.messages) || []; }
+    catch (e) { toast("回滚失败: " + (e.message || e)); return; }
+    if (!msgs.length) { toast("会话为空，无需回滚"); return; }
+    const sel = h("select", { class: "select" });
+    sel.appendChild(h("option", { value: "", text: "（回滚到最初，清空全部）" }));
+    msgs.slice(-20).reverse().forEach(m => {
+      const text = (m.parts || []).map(p => p.text || (p.type === "tool" ? "🔧" + (p.tool || "") : "")).join(" ").slice(0, 50);
+      sel.appendChild(h("option", { value: m.id, text: (m.role || "?") + ": " + text }));
+    });
+    openModal("回滚会话: " + k, { nodes: [formRow("保留到该消息（含），之后的消息将被删除", sel)] }, [
+      btn("回滚", async () => {
+        try { await rpc("sessions.rewind", { sessionKey: k, upToMessageId: sel.value || msgs[0].id }); closeModal(); loadHistory(k); toast("已回滚"); }
+        catch (e) { toast("回滚失败: " + (e.message || e)); }
+      }, "primary"),
+      btn("取消", closeModal)
+    ]);
   }
   async function archiveSession(k) {
     k = k || currentSession;
@@ -279,20 +313,33 @@
     catch (e) { toast("切换失败: " + (e.message || e)); }
   }
 
-  function toolCard(title, opts) {
-    const key = title + ":" + (opts.running ? "run" : opts.output || opts.error || "");
-    if (opts.running) {
-      const el = h("div", { class: "msg tool" }, h("span", { class: "title", text: "🔧 " + title }), h("span", { class: "spinner", text: "⠋" }));
-      $("messages").appendChild(el); toolCards.set(title, el); return;
-    }
-    const el = toolCards.get(title) || h("div", { class: "msg tool" });
-    el.className = "msg tool" + (opts.error ? " error" : "");
+  function toolCardRunning(callId, title) {
+    const el = h("div", { class: "msg tool" }, h("span", { class: "title", text: "🔧 " + title }), h("span", { class: "spinner", text: "⠋" }));
+    $("messages").appendChild(el);
+    if (callId) toolCards.set(callId, el);
+    return el;
+  }
+  function toolCardDone(callId, title, opts) {
+    const el = (callId && toolCards.get(callId)) || null;
+    if (callId) toolCards.delete(callId);
+    const target = el || h("div", { class: "msg tool" });
+    target.className = "msg tool" + (opts.error ? " error" : "");
     const d = h("details"); d.open = false;
     d.appendChild(h("summary", { text: (opts.error ? "❌ " : "✅ ") + title }));
     const pre = h("pre"); pre.innerHTML = formatOutput(opts.error || opts.output || "");
-    d.appendChild(pre); el.innerHTML = ""; el.appendChild(d);
-    if (!toolCards.get(title)) $("messages").appendChild(el);
-    toolCards.delete(title);
+    d.appendChild(pre); target.innerHTML = ""; target.appendChild(d);
+    if (!el) $("messages").appendChild(target);
+  }
+  function renderHistoryTool(tool, state) {
+    const box = h("div", { class: "msg tool" });
+    const d = h("details"); d.open = false;
+    const done = state && state.type === "completed";
+    const err = state && state.type === "error";
+    d.appendChild(h("summary", { text: (err ? "❌ " : done ? "✅ " : "🔧 ") + tool }));
+    const out = state && (state.output || state.error || "");
+    if (out) { const pre = h("pre"); pre.innerHTML = formatOutput(String(out)); d.appendChild(pre); }
+    box.appendChild(d);
+    return box;
   }
   function formatOutput(text) {
     return esc(text).split("\n").map(l => {
@@ -315,12 +362,19 @@
     send("permission.respond", { requestId: permRequestId, decision });
   }
 
+  let historyEpoch = 0;
   async function loadHistory(sessionKey) {
-    try { const r = await rpc("chat.history", { sessionKey }); $("messages").innerHTML = "";
+    const epoch = ++historyEpoch;
+    try { const r = await rpc("chat.history", { sessionKey });
+      if (epoch !== historyEpoch) return; // 已切换到其它会话，丢弃旧响应
+      $("messages").innerHTML = "";
       (r.payload && r.payload.messages || []).forEach(m => {
         const role = m.role === "user" ? "user" : "assistant";
-        const text = (m.parts || []).map(p => p.text || (p.type === "tool" ? "🔧 " + (p.tool || "") : "") || "").join("\n");
-        bubble(role, text);
+        (m.parts || []).forEach(p => {
+          if (p.type === "tool") { $("messages").appendChild(renderHistoryTool(p.tool || "", p.state)); return; }
+          const text = p.text || "";
+          if (text) bubble(role, text);
+        });
       }); scroll();
     } catch (e) {}
   }
@@ -499,69 +553,194 @@
 
   /* ---------- 看板 ---------- */
   const BOARD_COLS = ["triage", "backlog", "todo", "scheduled", "ready", "running", "review", "blocked", "done"];
+  const COL_LABEL = { triage: "分流", backlog: "积压", todo: "待办", scheduled: "排期", ready: "就绪", running: "进行中", review: "评审", blocked: "阻塞", done: "完成" };
+  const PRIO_COLOR = { low: "#8a94a6", normal: "#4a90d9", high: "#f5a623", urgent: "#e2483d" };
+  let currentBoard = "main";
+  let boardRefreshTimer = null;
+  /** workboard.changed 事件连发时合并刷新（300ms 防抖）。 */
+  function scheduleBoardRefresh() {
+    if (boardRefreshTimer) return;
+    boardRefreshTimer = setTimeout(() => { boardRefreshTimer = null; loadBoard(); }, 300);
+  }
+
+  async function loadBoards() {
+    const tabs = $("boardTabs"); if (!tabs) return; tabs.innerHTML = "";
+    let boards = [];
+    try { const r = await rpc("workboard.boards.list", { includeArchived: false }); boards = r.payload.boards || []; } catch (e) {}
+    if (!boards.length) boards = [{ id: "main", name: "主看板" }];
+    boards.forEach(b => {
+      const t = h("button", { class: "board-tab" + (b.id === currentBoard ? " on" : ""), text: b.name || b.id, dataset: { board: b.id } });
+      t.addEventListener("click", () => { currentBoard = b.id; loadBoards(); loadBoard(); });
+      tabs.appendChild(t);
+    });
+    const add = h("button", { class: "board-tab add", text: "＋ 板", title: "新建看板" });
+    add.addEventListener("click", newBoard);
+    tabs.appendChild(add);
+  }
+
   async function loadBoard() {
     const board = $("board"); board.innerHTML = "";
     let cards = [];
-    try { const r = await rpc("workboard.cards.list", { boardId: "main" }); cards = r.payload.cards || []; } catch (e) { toast("看板加载失败"); }
+    try { const r = await rpc("workboard.cards.list", { boardId: currentBoard }); cards = r.payload.cards || []; } catch (e) { toast("看板加载失败", "err"); }
     BOARD_COLS.forEach(col => {
-      const colEl = h("div", { class: "board-col", dataset: { col } });
-      colEl.appendChild(h("div", { class: "col-head" }, h("span", { text: col }), h("span", { text: String(cards.filter(c => c.status === col).length) })));
+      const list = cards.filter(c => c.status === col);
+      const colEl = h("div", { class: "board-col col-" + col, dataset: { col } });
+      colEl.appendChild(h("div", { class: "col-head" },
+        h("span", { class: "col-name", text: COL_LABEL[col] || col }),
+        h("span", { class: "col-count", text: String(list.length) })));
       const body = h("div", { class: "col-body" });
-      cards.filter(c => c.status === col).forEach(c => body.appendChild(renderCard(c)));
+      if (!list.length) body.appendChild(h("div", { class: "col-empty", text: "拖拽卡片至此" }));
+      list.forEach(c => body.appendChild(renderCard(c)));
       colEl.appendChild(body);
       colEl.addEventListener("dragover", (e) => { e.preventDefault(); colEl.classList.add("drag-over"); });
       colEl.addEventListener("dragleave", () => colEl.classList.remove("drag-over"));
-      colEl.addEventListener("drop", async (e) => { e.preventDefault(); colEl.classList.remove("drag-over");
-        const id = e.dataTransfer.getData("text/plain"); if (id) { try { await rpc("workboard.cards.move", { cardId: id, status: col }); } catch (err) { toast("移动失败"); } } });
+      colEl.addEventListener("drop", async (e) => {
+        e.preventDefault(); colEl.classList.remove("drag-over");
+        const id = e.dataTransfer.getData("text/plain"); if (!id) return;
+        // 乐观移动：立即把卡片 DOM 移到目标列，失败时整体重载
+        const cardEl = board.querySelector('.card[data-id="' + id + '"]');
+        if (cardEl) colEl.querySelector(".col-body").appendChild(cardEl);
+        try { await rpc("workboard.cards.move", { cardId: id, status: col }); }
+        catch (err) { toast("移动失败", "err"); loadBoard(); }
+      });
       board.appendChild(colEl);
     });
+    refreshDiagBadge(cards);
   }
+
+  function refreshDiagBadge(cards) {
+    const b = $("boardDiagBtn"); if (!b) return;
+    const hasIssue = (cards || []).some(c => c.status === "blocked" || (c.failureCount || 0) >= 3);
+    b.classList.toggle("has-issue", hasIssue);
+  }
+
   function renderCard(c) {
-    const el = h("div", { class: "card", draggable: "true" });
-    el.appendChild(h("div", { class: "c-title" }, document.createTextNode(c.title), h("span", { class: "c-prio prio-" + (c.priority || "normal"), text: c.priority || "normal" })));
-    if (c.description) el.appendChild(h("div", { class: "c-meta", text: c.description.slice(0, 80) }));
-    if (c.assignedAgentId) el.appendChild(h("div", { class: "c-meta", text: "🤖 " + c.assignedAgentId }));
+    const claimed = c.claimOwner && c.claimExpiresAt && c.claimExpiresAt > Date.now();
+    const el = h("div", { class: "card" + (claimed ? " claimed" : "") + (c.status === "blocked" ? " blocked" : "") + (c.status === "done" ? " done" : ""), draggable: "true", dataset: { id: c.id } });
+    el.style.borderLeftColor = PRIO_COLOR[c.priority] || PRIO_COLOR.normal;
+    el.appendChild(h("div", { class: "c-top" },
+      h("span", { class: "c-title", text: c.title }),
+      h("span", { class: "c-prio", text: (c.priority || "normal").slice(0, 3).toUpperCase(), style: "color:" + (PRIO_COLOR[c.priority] || PRIO_COLOR.normal) })));
+    if (c.labels) {
+      const labels = String(c.labels).split(",").filter(Boolean);
+      const lw = h("div", { class: "c-labels" });
+      labels.forEach(l => lw.appendChild(h("span", { class: "chip", text: l })));
+      el.appendChild(lw);
+    }
+    if (c.description) el.appendChild(h("div", { class: "c-desc", text: c.description.slice(0, 96) }));
+    const foot = h("div", { class: "c-foot" });
+    if (c.assignedAgentId) foot.appendChild(h("span", { class: "c-agent", text: "🤖 " + c.assignedAgentId }));
+    if (claimed) foot.appendChild(h("span", { class: "c-claim", text: "⚡ " + c.claimOwner, title: "心跳剩余 " + Math.max(0, Math.round((c.claimExpiresAt - Date.now()) / 1000)) + "s" }));
+    if (c.failureCount > 0) foot.appendChild(h("span", { class: "c-fail", text: "✖" + c.failureCount }));
+    el.appendChild(foot);
     el.addEventListener("dragstart", (e) => e.dataTransfer.setData("text/plain", c.id));
-    el.addEventListener("click", () => showCardDetail(c));
+    el.addEventListener("click", () => openDrawer(c.id));
     return el;
   }
-  async function showCardDetail(c) {
-    const evs = []; try { const r = await rpc("workboard.cards.events", { cardId: c.id }); evs.push(...(r.payload.events || [])); } catch (e) {}
-    const body = h("div", {});
-    body.appendChild(h("div", { class: "kv", html: "<b>状态</b> " + c.status + " · <b>优先级</b> " + (c.priority || "normal") }));
-    body.appendChild(h("div", { class: "kv", html: "<b>描述</b> " + esc(c.description || "") }));
-    if (c.assignedAgentId) body.appendChild(h("div", { class: "kv", html: "<b>指派</b> " + esc(c.assignedAgentId) }));
-    if (c.linkedTaskId) body.appendChild(h("div", { class: "kv", html: "<b>关联任务</b> " + esc(c.linkedTaskId) }));
-    if (c.linkedSessionKey) body.appendChild(h("div", { class: "kv", html: "<b>关联会话</b> " + esc(c.linkedSessionKey) }));
-    body.appendChild(h("div", { class: "kv", text: "事件历史 (" + evs.length + ")" }));
-    evs.forEach(e => body.appendChild(h("div", { class: "meta", text: (e.kind || "") + " · " + new Date(e.createdAt || 0).toLocaleString() + " · " + (e.actor || "") })));
-    const foot = [btn("移动状态", () => {
-      const sel = h("select", { class: "select" }); BOARD_COLS.forEach(s => sel.appendChild(h("option", { value: s, text: s }))); sel.value = c.status;
-      openModal("移动卡片: " + c.title, { nodes: [formRow("目标状态", sel)] }, [
-        btn("确定", async () => { try { await rpc("workboard.cards.move", { cardId: c.id, status: sel.value }); closeModal(); loadBoard(); } catch (e2) { toast("失败"); } }, "primary"),
-        btn("取消", closeModal)
-      ]);
-    }), btn("编辑", () => editCard(c)), btn("删除", async () => { if (confirm("删除卡片?")) { try { await rpc("workboard.cards.delete", { cardId: c.id }); closeModal(); loadBoard(); } catch (e2) {} } }, "deny"), btn("关闭", closeModal)];
-    openModal("卡片: " + c.title, { nodes: [body] }, foot);
+
+  async function openDrawer(cardId) {
+    const dr = $("boardDrawer"); dr.classList.remove("hidden"); dr.innerHTML = "";
+    let c; try { const r = await rpc("workboard.cards.read", { cardId }); c = r.payload; } catch (e) { toast("加载失败"); return; }
+    dr.appendChild(h("div", { class: "drawer-head" }, h("b", { text: c.title || "(无标题)" }), btn("✕", () => dr.classList.add("hidden"), "ghost sm")));
+    dr.appendChild(h("div", { class: "kv", html: "状态 <b>" + esc(c.status || "") + "</b> · 优先级 <b>" + esc(c.priority || "normal") + "</b>" + (c.executionStatus ? " · 执行 <b>" + esc(c.executionStatus) + "</b>" : "") }));
+    if (c.claimOwner) dr.appendChild(h("div", { class: "kv", html: "认领者 <b>" + esc(c.claimOwner) + "</b>" }));
+    if (c.assignedAgentId) dr.appendChild(h("div", { class: "kv", html: "指派 <b>" + esc(c.assignedAgentId) + "</b>" }));
+    if (c.sourceUrl) dr.appendChild(h("div", { class: "kv", html: "来源 <a href='" + esc(c.sourceUrl) + "' target='_blank'>" + esc(c.sourceUrl) + "</a>" }));
+    if (c.linkedTaskId) dr.appendChild(h("div", { class: "kv", html: "关联任务 <b>" + esc(c.linkedTaskId) + "</b>" }));
+    if (c.linkedSessionKey) dr.appendChild(h("div", { class: "kv", html: "关联会话 <b>" + esc(c.linkedSessionKey) + "</b>" }));
+
+    const acts = h("div", { class: "drawer-acts" });
+    const claimed = c.claimOwner && c.claimExpiresAt && c.claimExpiresAt > Date.now();
+    const re = () => openDrawer(cardId); // 看板重绘由 workboard.changed 事件（300ms 防抖）驱动
+    acts.appendChild(btn("认领", async () => { try { await rpc("workboard.cards.claim", { cardId, actor: "user" }); re(); } catch (e) { toast("认领失败"); } }, "primary"));
+    acts.appendChild(btn("完成", async () => { const s = prompt("完成总结（可选）"); try { await rpc("workboard.cards.complete", { cardId, summary: s || "" }); re(); } catch (e) { toast("完成失败"); } }));
+    acts.appendChild(btn("阻塞", async () => { const r2 = prompt("阻塞原因（可选）"); try { await rpc("workboard.cards.block", { cardId, reason: r2 || "" }); re(); } catch (e) { toast("阻塞失败"); } }));
+    if (claimed) acts.appendChild(btn("心跳", async () => { try { await rpc("workboard.cards.heartbeat", { cardId, actor: c.claimOwner }); re(); } catch (e) { toast("心跳失败"); } }));
+    if (claimed) acts.appendChild(btn("释放", async () => { try { await rpc("workboard.cards.release", { cardId }); re(); } catch (e) { toast("释放失败"); } }));
+    acts.appendChild(btn("移动", () => moveCardDialog(c)));
+    acts.appendChild(btn("编辑", () => editCard(c)));
+    acts.appendChild(btn("🔀 拆分", async () => { const items = prompt("子任务（每行一个，或逗号分隔）"); if (!items) return; try { await rpc("workboard.cards.decompose", { cardId, items }); re(); } catch (e) { toast("拆分失败"); } }, "ghost"));
+    acts.appendChild(btn("🔔 订阅", async () => { const t = prompt("订阅目标（留空=本应用；渠道格式 channel:wecom:acct）", "me"); if (t === null) return; try { await rpc("workboard.subscribe", { cardId, target: t || "me" }); toast("已订阅通知"); } catch (e) { toast("订阅失败"); } }, "ghost"));
+    acts.appendChild(btn("删除", async () => { if (confirm("删除卡片?")) { try { await rpc("workboard.cards.delete", { cardId }); dr.classList.add("hidden"); loadBoard(); } catch (e) {} } }, "deny"));
+    dr.appendChild(acts);
+
+    const sec = (title, rows) => { if (!rows || !rows.length) return; const s = h("div", { class: "sec" }); s.appendChild(h("div", { class: "sec-h", text: title + " (" + rows.length + ")" })); rows.forEach(r => s.appendChild(h("div", { class: "sec-b", text: r }))); dr.appendChild(s); };
+
+    if (c.notes) dr.appendChild(h("div", { class: "sec" }, h("div", { class: "sec-h", text: "备注" }), h("div", { class: "sec-b", text: c.notes })));
+    sec("依赖", (c.links || []).map(l => (l.type || "") + " → " + (l.targetCardId || l.title || "")));
+    sec("运行历史", (c.attempts || []).map(a => a.status + " · " + (a.engine || "-") + " · " + new Date(a.startedAt || 0).toLocaleString() + (a.error ? " · " + a.error : "")));
+    sec("证明", (c.proofs || []).map(p => p.status + " · " + (p.label || "")));
+    if (c.diagnostics && c.diagnostics.length) sec("诊断", c.diagnostics.map(x => x.severity + " · " + x.title));
+    if (c.events) {
+      const s = h("div", { class: "sec" }); s.appendChild(h("div", { class: "sec-h", text: "事件 (" + c.events.length + ")" }));
+      c.events.slice().reverse().forEach(e => s.appendChild(h("div", { class: "sec-b meta", text: (e.kind || "") + " · " + new Date(e.createdAt || 0).toLocaleString() + (e.actor ? " · " + e.actor : "") })));
+      dr.appendChild(s);
+    }
+  }
+
+  function moveCardDialog(c) {
+    const sel = h("select", { class: "select" }); BOARD_COLS.forEach(s => sel.appendChild(h("option", { value: s, text: COL_LABEL[s] || s }))); sel.value = c.status;
+    openModal("移动卡片: " + c.title, { nodes: [formRow("目标状态", sel)] }, [
+      btn("确定", async () => { try { await rpc("workboard.cards.move", { cardId: c.id, status: sel.value }); closeModal(); loadBoard(); } catch (e2) { toast("失败"); } }, "primary"),
+      btn("取消", closeModal)
+    ]);
   }
   function editCard(c) {
     const title = field("标题", c.title);
     const desc = field("描述", c.description);
     const prio = h("select", { class: "select" }); ["low", "normal", "high", "urgent"].forEach(p => prio.appendChild(h("option", { value: p, text: p }))); prio.value = c.priority || "normal";
     openModal("编辑卡片", { nodes: [title.wrap, desc.wrap, formRow("优先级", prio)] }, [
-      btn("保存", async () => { try { await rpc("workboard.cards.update", { cardId: c.id, title: title.inp.value, description: desc.inp.value, priority: prio.value }); closeModal(); loadBoard(); } catch (e) { toast("失败"); } }, "primary"),
+      btn("保存", async () => { try { await rpc("workboard.cards.update", { cardId: c.id, title: title.inp.value, description: desc.inp.value, priority: prio.value }); closeModal(); loadBoard(); if (!$("boardDrawer").classList.contains("hidden")) openDrawer(c.id); } catch (e) { toast("失败"); } }, "primary"),
       btn("取消", closeModal)
     ]);
   }
   function newCard() {
     const title = field("标题*", "");
     const desc = field("描述", "");
-    const status = h("select", { class: "select" }); BOARD_COLS.forEach(s => status.appendChild(h("option", { value: s, text: s }))); status.value = "triage";
+    const status = h("select", { class: "select" }); BOARD_COLS.forEach(s => status.appendChild(h("option", { value: s, text: COL_LABEL[s] || s }))); status.value = "triage";
     const prio = h("select", { class: "select" }); ["low", "normal", "high", "urgent"].forEach(p => prio.appendChild(h("option", { value: p, text: p }))); prio.value = "normal";
     openModal("新建卡片", { nodes: [title.wrap, desc.wrap, formRow("状态", status), formRow("优先级", prio)] }, [
-      btn("创建", async () => { if (!title.inp.value.trim()) { toast("标题必填"); return; } try { await rpc("workboard.cards.create", { boardId: "main", title: title.inp.value, description: desc.inp.value, status: status.value, priority: prio.value }); closeModal(); loadBoard(); } catch (e) { toast("创建失败"); } }, "primary"),
+      btn("创建", async () => { if (!title.inp.value.trim()) { toast("标题必填"); return; } try { await rpc("workboard.cards.create", { boardId: currentBoard, title: title.inp.value, description: desc.inp.value, status: status.value, priority: prio.value }); closeModal(); loadBoard(); } catch (e) { toast("创建失败"); } }, "primary"),
       btn("取消", closeModal)
     ]);
+  }
+  function newBoard() {
+    const id = prompt("看板 ID（英文/数字，如 proj-ai）"); if (!id) return;
+    const name = prompt("看板名称", id) || id;
+    try { rpc("workboard.boards.create", { id, name }).then(() => { currentBoard = id; loadBoards(); loadBoard(); }).catch(() => toast("创建失败")); } catch (e) { toast("创建失败"); }
+  }
+  async function toggleDiag() {
+    const box = $("boardDiag"); if (!box) return;
+    if (!box.classList.contains("hidden")) { box.classList.add("hidden"); return; }
+    let ds = []; try { const r = await rpc("workboard.diagnostics.list", { boardId: currentBoard }); ds = r.payload.diagnostics || []; } catch (e) {}
+    box.innerHTML = "";
+    box.appendChild(h("div", { class: "diag-head", text: "诊断 (" + ds.length + ")" }));
+    if (!ds.length) box.appendChild(h("div", { class: "sec-b", text: "无异常 ✓" }));
+    ds.forEach(d => box.appendChild(h("div", { class: "diag-item " + (d.severity || "warning") }, h("b", { text: d.title }), h("span", { class: "meta", text: " · " + d.cardId + " · " + (d.detail || "") }))));
+    box.classList.remove("hidden");
+  }
+
+  let notifCount = 0;
+  function bumpNotif(msg) {
+    notifCount++; const badge = $("notifBadge");
+    if (badge) { badge.textContent = notifCount > 99 ? "99+" : String(notifCount); badge.classList.remove("hidden"); }
+    toast("🔔 " + (msg || "看板通知"));
+  }
+  function clearNotifBadge() {
+    notifCount = 0;
+    const badge = $("notifBadge"); if (badge) { badge.textContent = "0"; badge.classList.add("hidden"); }
+  }
+  async function loadNotifications() {
+    const panel = $("notifPanel"); if (!panel) return;
+    let list = []; try { const r = await rpc("workboard.notifications.list", { boardId: currentBoard, limit: 40 }); list = r.payload.notifications || []; } catch (e) { return; }
+    panel.innerHTML = "";
+    panel.appendChild(h("div", { class: "diag-head", text: "通知 (" + list.length + ")" }));
+    if (!list.length) panel.appendChild(h("div", { class: "sec-b", text: "暂无通知" }));
+    list.forEach(n => {
+      const it = h("div", { class: "notif-item" }, h("b", { text: n.message || n.kind }), h("span", { class: "meta", text: " · " + new Date(n.createdAt || 0).toLocaleString() }));
+      if (n.cardId) it.addEventListener("click", () => { p.classList.add("hidden"); openDrawer(n.cardId); });
+      panel.appendChild(it);
+    });
   }
 
   /* ---------- 任务 ---------- */
@@ -823,7 +1002,9 @@
     const items = paletteItems.filter(it => ((it.label || "") + " " + (it.cat || "")).toLowerCase().includes((q || "").toLowerCase()));
     items.forEach((it, i) => {
       const d = h("div", { class: "palette-item" + (i === paletteSel ? " sel" : "") }, h("span", { text: it.label }), h("span", { class: "cat", text: it.cat || "" }));
-      d.onclick = () => choosePalette(it); box.appendChild(d);
+      d.onclick = () => choosePalette(it);
+      if (i === paletteSel) d.scrollIntoView({ block: "nearest" });
+      box.appendChild(d);
     });
     if (!items.length) box.appendChild(h("div", { class: "empty", text: "无匹配" }));
   }
@@ -899,6 +1080,12 @@
     });
     document.addEventListener("keydown", (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); buildPalette("cmd"); }
+      else if (e.key === "Escape") {
+        if (!$("palette").classList.contains("hidden")) $("palette").classList.add("hidden");
+        else if (!$("modal").classList.contains("hidden")) closeModal();
+        else if (!$("notifPanel").classList.contains("hidden")) $("notifPanel").classList.add("hidden");
+        else if (!$("boardDrawer").classList.contains("hidden")) $("boardDrawer").classList.add("hidden");
+      }
     });
     $("viewsNav").addEventListener("click", (e) => { const b = e.target.closest(".vnav"); if (b) switchView(b.dataset.view); });
 
@@ -924,6 +1111,15 @@
     // 看板
     $("boardAdd").onclick = newCard;
     $("boardRefresh").onclick = loadBoard;
+    $("boardDiagBtn").onclick = toggleDiag;
+    $("boardDispatch").onclick = () => rpc("workboard.dispatch", {})
+        .then(r => { if (r && r.payload && r.payload.activeWorkers != null) $("boardWorkers").textContent = "运行中 worker: " + r.payload.activeWorkers; loadBoards(); loadBoard(); })
+        .catch(e => toast("派发失败: " + (e.message || e.code || e), "err"));
+    $("notifBtn").onclick = (e) => { e.stopPropagation(); const p = $("notifPanel"); p.classList.toggle("hidden"); if (!p.classList.contains("hidden")) { clearNotifBadge(); loadNotifications(); } };
+    document.addEventListener("click", (e) => {
+      const p = $("notifPanel");
+      if (!p.classList.contains("hidden") && !p.contains(e.target) && e.target.id !== "notifBtn") p.classList.add("hidden");
+    });
     // 任务
     $("tasksRefresh").onclick = loadTasks;
     // 调度
@@ -935,6 +1131,7 @@
     $("memorySweep").onclick = memSweep;
     // 用量
     document.querySelectorAll('[data-usagetab]').forEach(b => b.onclick = () => loadUsage(b.dataset.usagetab));
+    $("usageRefresh").onclick = () => loadUsage(document.querySelector('.mem-tabs [data-usagetab].on').dataset.usagetab);
     // 频道
     $("channelAdd").onclick = newChannel;
     // 设备

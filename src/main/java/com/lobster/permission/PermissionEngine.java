@@ -17,6 +17,8 @@ import java.util.function.Consumer;
  */
 public class PermissionEngine {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(PermissionEngine.class);
+
     public record PendingPermission(String requestId, PermissionRequest request,
                                     CompletableFuture<PermissionReply> future) {}
 
@@ -57,9 +59,18 @@ public class PermissionEngine {
         var req = new PermissionRequest(permission, patterns, sessionId);
         var action = evaluateFirst(permission, patterns);
         return switch (action) {
-            case DENY -> new PermissionReply(PermissionReply.Decision.REJECT, "规则拒绝");
-            case ALLOW -> new PermissionReply(PermissionReply.Decision.ALLOW_ONCE, null);
-            case ASK -> suspend(req);
+            case DENY -> {
+                log.info("权限 DENY permission={} patterns={} session={}", permission, patterns, sessionId);
+                yield new PermissionReply(PermissionReply.Decision.REJECT, "规则拒绝");
+            }
+            case ALLOW -> {
+                log.info("权限 ALLOW permission={} patterns={} session={}", permission, patterns, sessionId);
+                yield new PermissionReply(PermissionReply.Decision.ALLOW_ONCE, null);
+            }
+            case ASK -> {
+                log.info("权限 ASK（挂起等待 UI） permission={} patterns={} session={}", permission, patterns, sessionId);
+                yield suspend(req);
+            }
         };
     }
 

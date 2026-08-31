@@ -42,7 +42,7 @@ select.select { width: 100%; }
 .view { position: absolute; inset: 0; display: none; }
 .view:not(.hidden) { display: flex; }
 .view-head { display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 16px; border-bottom: 1px solid #232833; }
+  padding: 10px 16px; border-bottom: 1px solid #232833; position: relative; }
 .view-head h3 { font-size: 15px; }
 
 /* 对话视图三栏 */
@@ -172,8 +172,73 @@ table.tbl tr:hover td { background: #161b24; }
 .perm-btns { display: flex; gap: 6px; justify-content: flex-end; }
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #1b2230;
   border: 1px solid #2a3340; color: #e6e6e6; padding: 10px 16px; border-radius: 8px; z-index: 80; font-size: 13px; }
+.toast.err { background: #2a1414; border-color: #5a2a2a; color: #ffb4b4; }
 .toast.hidden { display: none; }
 .kv { font-size: 12px; color: #9aa4b2; margin: 2px 0; }
 .kv b { color: #e6e6e6; font-weight: 600; }
 .bar { height: 8px; background: #1f6feb; border-radius: 4px; margin-top: 2px; }
 .empty { color: #5a6472; font-size: 12px; padding: 12px; text-align: center; }
+
+/* ===== 看板精致化 ===== */
+.board-tabs { display: flex; gap: 6px; padding: 8px 12px 0; flex-wrap: wrap; align-items: center; }
+.board-tab { background: #12161d; color: #9aa4b2; border: 1px solid #232833; border-radius: 16px; padding: 4px 14px; font-size: 12px; cursor: pointer; }
+.board-tab.on { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.board-tab.add { border-style: dashed; color: #6b7686; }
+.board-diag { margin: 8px 12px 0; padding: 8px 10px; background: #1a1410; border: 1px solid #3a2a18; border-radius: 8px; }
+.diag-head { font-size: 12px; color: #f0b86a; margin-bottom: 4px; }
+.diag-item { font-size: 12px; padding: 4px 6px; border-radius: 6px; margin-top: 4px; background: #221a12; }
+.diag-item b { color: #ffcf8a; }
+.diag-item.error, .diag-item.critical { background: #2a1414; }
+.diag-item.error b, .diag-item.critical b { color: #ff9a9a; }
+#boardDiagBtn.has-issue { color: #ff9a9a; border-color: #5a2a2a; }
+
+.board-col { background: #12161d; border: 1px solid #232833; border-radius: 10px; width: 232px; min-width: 208px;
+  display: flex; flex-direction: column; max-height: 100%; transition: border-color .15s, box-shadow .15s; }
+.board-col.drag-over { border-color: #1f6feb; box-shadow: 0 0 0 2px rgba(31,111,235,.25) inset; }
+.board-col .col-head { padding: 9px 11px; font-size: 12px; color: #9aa4b2; border-bottom: 1px solid #232833; display: flex; justify-content: space-between; align-items: center; }
+.col-name { font-weight: 600; letter-spacing: .3px; }
+.col-count { background: #1d2530; color: #8b95a4; border-radius: 10px; padding: 0 8px; font-size: 11px; }
+.col-body { overflow: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; min-height: 44px; }
+.col-empty { color: #4a5360; font-size: 11px; text-align: center; padding: 14px 0; border: 1px dashed #232833; border-radius: 8px; }
+.col-running { border-top: 2px solid #1f9b6b; }
+.col-blocked { border-top: 2px solid #e2483d; }
+.col-review { border-top: 2px solid #b07cf0; }
+.col-done { border-top: 2px solid #3a8f5a; }
+.col-ready { border-top: 2px solid #4a90d9; }
+
+.card { background: #18202b; border: 1px solid #2a3340; border-left: 3px solid #4a90d9; border-radius: 9px; padding: 9px 10px; font-size: 13px; cursor: grab; transition: transform .1s, box-shadow .15s, border-color .15s; }
+.card:hover { border-color: #3a475a; transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0,0,0,.35); }
+.card:active { cursor: grabbing; }
+.card.claimed { box-shadow: 0 0 0 1px rgba(240,184,106,.6) inset; border-color: #f0b86a; }
+.card.blocked { opacity: .82; background: #201820; }
+.card.done { opacity: .6; }
+.c-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.c-title { font-weight: 600; line-height: 1.3; }
+.c-prio { font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 8px; background: #222b38; letter-spacing: .5px; }
+.c-labels { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.chip { background: #232f3f; color: #9cc4ff; font-size: 10px; padding: 1px 7px; border-radius: 8px; }
+.c-desc { color: #7c8794; font-size: 11px; margin-top: 6px; line-height: 1.4; }
+.c-foot { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 7px; font-size: 10px; color: #7c8794; }
+.c-agent { color: #8fb6ff; }
+.c-claim { color: #f0b86a; font-weight: 600; }
+.c-fail { color: #ff9a9a; }
+
+.board-drawer { position: fixed; top: 0; right: 0; height: 100vh; width: 380px; max-width: 92vw; background: #0f131a; border-left: 1px solid #232833; box-shadow: -8px 0 24px rgba(0,0,0,.4); padding: 16px; overflow-y: auto; z-index: 70; }
+.drawer-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 10px; }
+.drawer-head b { font-size: 15px; }
+.drawer-acts { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; padding-bottom: 10px; border-bottom: 1px solid #232833; }
+.sec { margin: 10px 0; }
+.sec-h { font-size: 11px; color: #8b95a4; text-transform: uppercase; letter-spacing: .4px; margin-bottom: 4px; }
+.sec-b { font-size: 12px; color: #c4ccd6; padding: 3px 0; border-bottom: 1px solid #1a212b; }
+.sec-b.meta { color: #7c8794; }
+.sec.diag .sec-b { color: #ffcf8a; }
+
+.board-workers { font-size: 11px; color: #8b95a4; padding: 2px 6px; }
+.badge { display: inline-block; min-width: 16px; text-align: center; font-size: 10px; font-weight: 700; padding: 0 5px; border-radius: 10px; background: #ff5d5d; color: #fff; margin-left: 3px; }
+.badge.hidden { display: none; }
+.notif-panel { position: absolute; top: 46px; right: 12px; width: 320px; max-height: 60vh; overflow-y: auto; background: #0f131a; border: 1px solid #232833; border-radius: 12px; box-shadow: 0 12px 30px rgba(0,0,0,.5); padding: 10px; z-index: 80; }
+.notif-panel.hidden { display: none; }
+.notif-item { padding: 7px 4px; border-bottom: 1px solid #1a212b; font-size: 12px; color: #d2dae4; border-radius: 6px; }
+.notif-item:hover { background: #18202b; }
+.notif-item .meta { color: #7c8794; }
+

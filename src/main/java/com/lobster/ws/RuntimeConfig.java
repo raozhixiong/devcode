@@ -15,6 +15,8 @@ import com.lobster.store.ShareService;
 import com.lobster.tool.PermissionReply;
 import com.lobster.tool.ToolRegistry;
 import com.lobster.tool.builtin.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -26,6 +28,8 @@ import java.util.List;
 /** 运行时装配：lobster.json 配置驱动，无配置回退 Mock。 */
 @Configuration
 public class RuntimeConfig {
+
+    private static final Logger log = LoggerFactory.getLogger(RuntimeConfig.class);
 
     @Bean
     public LobsterConfig lobsterConfig(Path stateDir, @Value("${lobster.config:}") String configOverride) {
@@ -68,6 +72,47 @@ public class RuntimeConfig {
     public com.lobster.store.CronStore cronStore(javax.sql.DataSource sharedDataSource, EventBus bus) {
         return new com.lobster.store.CronStore(
                 new org.springframework.jdbc.core.JdbcTemplate(sharedDataSource), bus);
+    }
+
+    @Bean
+    public LlmProvider llmProvider(LobsterConfig config) {
+        if (config.hasRealLlm()) {
+            var s = config.llm();
+            log.info("LLM 提供商装配：真实模型 baseUrl={} model={} provider={}",
+                    s.baseUrl(), s.model(), s.provider());
+            return new OpenAiCompatProvider(s.baseUrl(), s.apiKey());
+        }
+        log.warn("LLM 提供商装配：未检测到可用 llm 配置，回退 Mock 模式（仅 echo 文案，不调用真实模型）");
+        return new MockLlmProvider(List.of(
+                new LlmEvent.TextDelta("（Mock 模式）已收到消息。在 ~/.lobster/lobster.json 配置 llm 段（baseUrl/apiKey/model）即可接入真实模型。"),
+                new LlmEvent.Finish("stop", new LlmEvent.Usage(10, 20))));
+    }
+
+    @Bean
+    public String llmModel(LobsterConfig config) {
+        return config.hasRealLlm() ? config.llm().model() : "mock-echo";
+    }
+
+    @Bean
+    public com.lobster.workboard.DispatchService dispatchService(
+            com.lobster.store.WorkboardStore workboard, AgentLoop agentLoop, MessageStore messageStore,
+            LlmProvider llm, String model) {
+        var svc = new com.lobster.workboard.DispatchService(workboard, agentLoop, messageStore, "main", llm, model);
+        svc.start();
+        return svc;
+    }
+
+    @Bean
+    public com.lobster.workboard.LifecycleSyncService lifecycleSyncService(EventBus bus,
+            com.lobster.workboard.DispatchService dispatch) {
+        return new com.lobster.workboard.LifecycleSyncService(bus, dispatch);
+    }
+
+    @Bean
+    public com.lobster.workboard.NotificationService notificationService(
+            com.lobster.store.WorkboardStore workboard, EventBus bus,
+            ChannelReplyService channelReply) {
+        return new com.lobster.workboard.NotificationService(workboard, bus, channelReply);
     }
 
     @Bean
@@ -327,25 +372,18 @@ public class RuntimeConfig {
                                 com.lobster.store.ReferenceStore referenceStore,
                                 com.lobster.tool.builtin.ComputerTool computerTool,
                                 com.lobster.tool.builtin.ReferenceTool referenceTool,
-                                com.lobster.tool.builtin.TtsTool ttsTool) {
+                                com.lobster.tool.builtin.TtsTool ttsTool,
+                                com.lobster.store.WorkboardStore workboard,
+                                LlmProvider llm, String model) {
         var tools = ToolRegistry.of(
                 new ReadTool(), new WriteTool(), new EditTool(),
                 new GlobTool(), new GrepTool(), new BashTool(sandboxService),
                 new TodoTool(), new QuestionTool(), new ListTool());
+        // 看板工具（对齐 OpenClaw board.*）：12 个独立工具
+        for (var a : new String[]{"list","read","create","move","update","claim","release","complete","block","unblock","heartbeat","decompose"})
+            tools.register(new com.lobster.tool.builtin.WorkboardTool(a, workboard));
         tools.register(new com.lobster.tool.builtin.SkillTool(skillsStore));
         for (var mt : mcpManager.tools()) tools.register(mt);
-        LlmProvider llm;
-        String model;
-        if (config.hasRealLlm()) {
-            var s = config.llm();
-            llm = new OpenAiCompatProvider(s.baseUrl(), s.apiKey());
-            model = s.model();
-        } else {
-            llm = new MockLlmProvider(List.of(
-                    new LlmEvent.TextDelta("（Mock 模式）已收到消息。在 ~/.lobster/lobster.json 配置 llm 段（baseUrl/apiKey/model）即可接入真实模型。"),
-                    new LlmEvent.Finish("stop", new LlmEvent.Usage(10, 20))));
-            model = "mock-echo";
-        }
         var loop = new AgentLoop(store, bus, tools, permissions, llm, "main", model, inbox);
         // writer claim 围栏（崩溃恢复：重启清孤儿 claim）
         loop.setWriterClaimStore(new com.lobster.store.WriterClaimStore(mainAgentDb));

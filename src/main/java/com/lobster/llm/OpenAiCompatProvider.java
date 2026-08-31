@@ -23,6 +23,7 @@ import java.util.stream.Stream;
 public class OpenAiCompatProvider implements LlmProvider {
 
     private static final ObjectMapper OM = new ObjectMapper();
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(OpenAiCompatProvider.class);
 
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(15))
@@ -44,10 +45,12 @@ public class OpenAiCompatProvider implements LlmProvider {
     public Stream<LlmEvent> streamBlocking(LlmRequest req) {
         try {
             HttpRequest httpReq = buildRequest(req);
+            log.info("LLM HTTP 请求 {} model={} tools={}", httpReq.uri(), req.model(), req.tools().size());
             HttpResponse<java.io.InputStream> resp =
                     http.send(httpReq, HttpResponse.BodyHandlers.ofInputStream());
             if (resp.statusCode() / 100 != 2) {
                 String err = new String(resp.body().readAllBytes());
+                log.error("LLM HTTP 非 2xx 状态 {} body={}", resp.statusCode(), truncate(err, 2000));
                 return Stream.of(new LlmEvent.Error(
                         new IllegalStateException("LLM HTTP " + resp.statusCode() + ": " + err)));
             }
@@ -57,6 +60,8 @@ public class OpenAiCompatProvider implements LlmProvider {
                 String line;
                 String finishReason = "stop";
                 LlmEvent.Usage usage = new LlmEvent.Usage(0, 0);
+                int deltaCount = 0;
+                int toolCallCount = 0;
                 while ((line = reader.readLine()) != null) {
                     if (!line.startsWith("data:")) continue;
                     String payload = line.substring(5).trim();
@@ -65,6 +70,7 @@ public class OpenAiCompatProvider implements LlmProvider {
                     JsonNode choice = root.path("choices").path(0);
                     String delta = choice.path("delta").path("content").asText(null);
                     if (delta != null && !delta.isEmpty()) {
+                        deltaCount++;
                         events.add(new LlmEvent.TextDelta(delta));
                     }
                     JsonNode toolCalls = choice.path("delta").path("tool_calls");
@@ -74,6 +80,7 @@ public class OpenAiCompatProvider implements LlmProvider {
                             String name = tc.path("function").path("name").asText(null);
                             String args = tc.path("function").path("arguments").asText("");
                             if (id != null && name != null) {
+                                toolCallCount++;
                                 events.add(new LlmEvent.ToolCall(id, name, args));
                             }
                         }
@@ -88,11 +95,20 @@ public class OpenAiCompatProvider implements LlmProvider {
                     }
                 }
                 events.add(new LlmEvent.Finish(finishReason, usage));
+                log.info("LLM HTTP 响应完成 {} deltas={} toolCalls={} finish={} tokens(in/out)={}/{}",
+                        httpReq.uri(), deltaCount, toolCallCount, finishReason,
+                        usage.inputTokens(), usage.outputTokens());
                 return events.stream();
             }
         } catch (Exception e) {
+            log.error("LLM HTTP 请求异常", e);
             return Stream.of(new LlmEvent.Error(e));
         }
+    }
+
+    private static String truncate(String s, int max) {
+        if (s == null) return "";
+        return s.length() <= max ? s : s.substring(0, max) + "\n...truncated...";
     }
 
     private HttpRequest buildRequest(LlmRequest req) throws Exception {

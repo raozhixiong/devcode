@@ -56,6 +56,7 @@ public class WsHandler extends TextWebSocketHandler {
         conn.putSession(session.getId(), session);
         Runnable unsub = bus.subscribeAll(e -> sendEvent(session, e));
         conn.putUnsub(session.getId(), unsub);
+        log.info("WS 连接建立 session={}", session.getId());
         if (authService.isAuthRequired()) {
             sendEvent(session, new LobsterEvent(Events.CONNECT_CHALLENGE, "",
                     OM.createObjectNode()
@@ -63,6 +64,7 @@ public class WsHandler extends TextWebSocketHandler {
                             .put("nonce", java.util.UUID.randomUUID().toString())
                             .put("ts", System.currentTimeMillis()), false));
         } else {
+            log.info("WS 连接无需认证 session={}", session.getId());
             sendRes(session, "connect", true, OM.createObjectNode()
                     .put("protocol", 1).put("authRequired", false)
                     .set("policy", OM.createObjectNode().put("maxPayload", 1048576)));
@@ -71,6 +73,7 @@ public class WsHandler extends TextWebSocketHandler {
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
+        log.info("WS 连接关闭 session={} status={}", session.getId(), status);
         conn.removeSession(session.getId());
         Runnable unsub = conn.takeUnsub(session.getId());
         if (unsub != null) unsub.run();
@@ -83,6 +86,7 @@ public class WsHandler extends TextWebSocketHandler {
         String id = frame.path("id").asText();
         String method = frame.path("method").asText();
         JsonNode params = frame.path("params");
+        log.info("WS 收到请求 session={} id={} method={}", session.getId(), id, method);
         try {
             handleReq(session, id, method, params);
         } catch (Exception e) {
@@ -97,6 +101,7 @@ public class WsHandler extends TextWebSocketHandler {
     private void handleReq(WebSocketSession session, String id, String method, JsonNode params) throws Exception {
         if (authService.isAuthRequired() && !conn.isAuthed(session.getId())
                 && !AUTH_ALLOWED_METHODS.contains(method)) {
+            log.warn("WS 未认证请求被拒 session={} method={}", session.getId(), method);
             ObjectNode err = OM.createObjectNode();
             err.put("code", "UNAUTHORIZED").put("message", "请先认证");
             sendRes(session, id, false, err);
@@ -104,6 +109,7 @@ public class WsHandler extends TextWebSocketHandler {
         }
         RpcHandler handler = registry.get(method);
         if (handler == null) {
+            log.warn("WS 未知方法 session={} method={}", session.getId(), method);
             ObjectNode err = OM.createObjectNode();
             err.put("code", "METHOD_NOT_FOUND").put("message", "未知方法: " + method);
             sendRes(session, id, false, err);
